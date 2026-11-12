@@ -96,7 +96,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--text")
     p.add_argument("--json", action="store_true")
 
-    p = add("like", c.cmd_like, "좋아요 상태 / [제한] 등록·취소 (현재 4013)")
+    p = add("like", c.cmd_like, "좋아요 상태 / 등록·취소")
     p.add_argument("--article", required=True)
     g = p.add_mutually_exclusive_group()
     g.add_argument("--on", action="store_true")

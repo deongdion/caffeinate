@@ -48,7 +48,7 @@ python -m caffeinate.cli like    --article <URL>   # 좋아요 수 / 내가 눌�
 python -m caffeinate.cli post    --cafe <카페> --menu 1 --title "제목" --body "내용" [--image a.png ...]
 python -m caffeinate.cli comment --article <URL> --add "내용"
 python -m caffeinate.cli reply   --article <URL> --comment <댓글ID> --text "내용"
-python -m caffeinate.cli like    --article <URL> --on / --off      # [제한] 현재 4013
+python -m caffeinate.cli like    --article <URL> --on / --off      # 좋아요 등록 / 취소
 ```
 
 모든 조회 명령은 `--json` 지원. 게시글 URL 은 `f-e/cafes/{id}/articles/{id}`, `m.cafe ... /cafes/{slug}/articles/{id}`,
@@ -106,7 +106,7 @@ asyncio.run(main())
 - 남은 문제:
   - 글 수정(`articles.update`), 연속 댓글(2001 응답은 서버 딜레이, 잠시 후 재시도하면 성공)도 실측 확인.
   - 이미지 첨부: 본문 이미지 404 문제 해결 (contentJson image.path 에 업로드 응답 <url> 을 넣어야 함, 187번 글로 검증).
-  - 좋아요 등록/취소: 요청 형식은 캡처대로지만 guestToken 이 like 위젯 세션에 묶여 있어 4013 을 받는다.
+  - 좋아요: 4013 문제 해결 (요청 timestamp 에 토큰 발급 응답의 timestamp 를 넣어야 함, 177번 글로 검증).
   - 카페 등급 후보 API(`members.grade`)는 미확정. 멤버이면 `my_info` 가 members 응답의 등급을 쓴다.
 
 ## 주의

@@ -1,8 +1,8 @@
 """좋아요(공감)"""
-import time
 from typing import Any
 
 from ..core import endpoints
+from ..core.errors import ParseError
 from ..enums import ReactionType
 from ..models import ArticleRef, LikeStatus
 from ..utils.parsing import as_list, dig
@@ -41,20 +41,17 @@ class LikeService(BaseService):
         return LikeStatus.from_api(contents[0] if contents else {}, cid)
 
     async def like(self, ref: ArticleRef | str, reaction: ReactionType = ReactionType.LIKE) -> Any:
-        """[제한] 좋아요 등록 - 브라우저 요청 형식 그대로지만 현재 4013 반환
-
-        guestToken 이 게시글 렌더 시점의 like 위젯 세션에 묶여 있어, 파이썬에서 받은 토큰은 거부된다.
-        """
+        """좋아요 등록 [실측 2026-11-12]"""
         return await self._react(ref, reaction, "POST")
 
     async def unlike(self, ref: ArticleRef | str, reaction: ReactionType = ReactionType.LIKE) -> Any:
-        """[제한] 좋아요 취소 - like() 와 같은 제한"""
+        """좋아요 취소 [실측 2026-11-12]"""
         return await self._react(ref, reaction, "DELETE")
 
     async def _react(self, ref: ArticleRef | str, reaction: ReactionType, method: str) -> Any:
         r = await self._full_ref(ref)
         cid = content_id(r)
-        token = await self._guest_token(r)
+        token, issued_at = await self._guest_token(r)
         return await self.session.get_json(
             endpoints.like_content(cid),
             params={
@@ -64,7 +61,7 @@ class LikeService(BaseService):
                 "reactionType": reaction.value,
                 "categoryId": r.cafe_id,
                 "guestToken": token,
-                "timestamp": int(time.time() * 1000),
+                "timestamp": issued_at,
                 "_ch": "pcw",
                 "isDuplication": "false",
                 "lang": "ko",
@@ -77,8 +74,12 @@ class LikeService(BaseService):
             referer=endpoints.article_page(r.cafe_id, r.article_id),
         )
 
-    async def _guest_token(self, r: ArticleRef) -> str:
-        """like 위젯 토큰 (route-like search 응답의 guestToken)"""
+    async def _guest_token(self, r: ArticleRef) -> tuple[str, int]:
+        """like 위젯 토큰 -> (guestToken, timestamp)
+
+        [실측] 등록/취소 요청의 timestamp 는 현재 시각이 아니라 이 search 응답의 timestamp 여야 한다.
+        토큰이 발급 시각에 묶여 있어, 다른 값을 보내면 4013 이 온다.
+        """
         data = await self.session.get_json(
             endpoints.LIKE_ROUTE_SEARCH,
             params={
@@ -90,5 +91,9 @@ class LikeService(BaseService):
             },
             referer=endpoints.article_page(r.cafe_id, r.article_id),
         )
-        return str(dig(data, "guestToken") or "")
+        token = str(dig(data, "guestToken") or "")
+        issued_at = dig(data, "timestamp")
+        if not token or not isinstance(issued_at, int):
+            raise ParseError(f"like 토큰 응답 형식이 다름: {str(data)[:200]}")
+        return token, issued_at
 

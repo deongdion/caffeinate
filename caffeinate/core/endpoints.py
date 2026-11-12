@@ -30,7 +30,7 @@ _BOARDLIST: Final = f"{APIS}/cafe-web/cafe-boardlist-api/v1/cafes"
 # [실측] 조회: /v1/search/contents?q=CAFE[{cafeId}_{cafeUrl}_{articleId}]  (/v1/search 는 500)
 LIKE_SEARCH: Final = f"{LIKE}/v1/search/contents"
 # [실측] 등록/취소 브라우저 요청: GET route-like /v1/services/CAFE/contents/{cid}?_method=POST|DELETE
-#   guestToken 은 route-like /v1/search/contents 응답에서 얻지만, 파이썬 세션 토큰은 4013 (제한)
+#   guestToken 과 timestamp 는 route-like /v1/search/contents 응답 값을 그대로 쓴다 (timestamp 가 다르면 4013)
 LIKE_ROUTE_SEARCH: Final = f"{LIKE_ROUTE}/v1/search/contents"
 
 # ---- 내 카페 목록 폴백 [실측] 레거시 GNB (cp949 HTML) ----
