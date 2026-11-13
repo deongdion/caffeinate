@@ -1,6 +1,6 @@
 # caffeinate - 네이버 카페 자동화 (curl_cffi AsyncSession)
 
-실제 크롬과 같은 TLS/HTTP2 지문, 헤더 순서로 네이버 카페를 다루는 비동기 파이썬 라이브러리 + CLI.
+실제 크롬과 같은 TLS/HTTP2 지문, 헤더 순서로 네이버 카페를 다루는 비동기 파이썬 라이브러리.
 
 ## 설치
 
@@ -22,37 +22,24 @@ caffeinate/
 ├── services/          cafes · boards · articles · comments · likes · members · photos
 ├── auth/              browser(크롬 실행) · cdp(curl_cffi WebSocket) · login(쿠키 수집)
 ├── utils/             parsing(URL/JSON) · html · editor(contentJson) · multipart
-├── cli/               python -m caffeinate.cli
 └── profile/           PC별 fingerprint.json / cookies.json  (공유·커밋 금지)
 ```
 
-## CLI
+## 로그인
 
-```
-python -m caffeinate.cli login                     # 로그인 창 -> 쿠키 자동 저장
-python -m caffeinate.cli status                    # 로그인 유효 확인
-python -m caffeinate.cli set --aut <NID_AUT> --ses <NID_SES>   # 수동 등록
+```python
+import asyncio
+from caffeinate import Caffeinate
 
-python -m caffeinate.cli fingerprint [--new]       # PC 지문 확인/재생성
-python -m caffeinate.cli check-fingerprint         # TLS/HTTP2/헤더 순서 실측
+async def main():
+    # 전용 크롬 프로필로 로그인 창을 띄우고 쿠키를 profile/cookies.json 에 저장
+    async with await Caffeinate.login() as cafe:
+        print(await cafe.is_logged_in())
 
-python -m caffeinate.cli cafes                     # 내 카페 목록 (로그인)
-python -m caffeinate.cli boards --cafe remonterace --articles 2
-python -m caffeinate.cli myinfo --cafe remonterace # 닉네임/등급/활동통계 (로그인)
-python -m caffeinate.cli article --article <URL>
-python -m caffeinate.cli comment --article <URL>   # 댓글 + 대댓글 트리
-python -m caffeinate.cli reply   --article <URL> --json
-python -m caffeinate.cli like    --article <URL>   # 좋아요 수 / 내가 눌렀는지
-
-# 쓰기 (로그인 + 카페 멤버)
-python -m caffeinate.cli post    --cafe <카페> --menu 1 --title "제목" --body "내용" [--image a.png ...]
-python -m caffeinate.cli comment --article <URL> --add "내용"
-python -m caffeinate.cli reply   --article <URL> --comment <댓글ID> --text "내용"
-python -m caffeinate.cli like    --article <URL> --on / --off      # 좋아요 등록 / 취소
+asyncio.run(main())
 ```
 
-모든 조회 명령은 `--json` 지원. 게시글 URL 은 `f-e/cafes/{id}/articles/{id}`, `m.cafe ... /cafes/{slug}/articles/{id}`,
-`{slug}/{articleId}`, `ArticleRead.nhn?clubid=..` 등 모두 받는다.
+이후에는 `Caffeinate()` 가 저장된 쿠키를 읽는다. 쿠키가 만료되면 `Caffeinate.login()` 을 다시 호출한다.
 
 ## 라이브러리
 
@@ -69,6 +56,7 @@ async def main():
         comments = await cafe.comments.all(article.ref)               # list[Comment] (평탄)
         tree = build_tree(comments)                                   # replies 채움
         like = await cafe.likes.status(article.ref)                   # LikeStatus
+        # 게시글 URL 은 f-e/cafes/{id}/articles/{id}, {slug}/{articleId}, ArticleRead.nhn?clubid=.. 등 모두 받는다
 
         # 하나의 AsyncSession 으로 동시 요청
         pages = await asyncio.gather(*(cafe.boards.articles(cafe_id, b.menu_id) for b in boards))
@@ -76,7 +64,10 @@ async def main():
         # 쓰기 (로그인 + 카페 멤버)
         img = await cafe.photos.upload_file(cafe_id, 1, "a.png")      # UploadedImage
         ref = await cafe.articles.write(cafe_id, 1, "제목", "본문\n둘째 줄", images=[img])  # ArticleRef
-        await cafe.comments.add(ref, "댓글")
+        await cafe.comments.add(ref, "댓글")                          # -> commentId
+        await cafe.comments.reply(ref, 136299567, "대댓글")
+        await cafe.articles.update(ref, 1, "새 제목", "새 본문", images=[img])
+        await cafe.likes.like(ref)                                    # unlike(ref) 로 취소
         info = await cafe.members.my_info(cafe_id)                     # 닉네임/등급/활동통계
 
 asyncio.run(main())

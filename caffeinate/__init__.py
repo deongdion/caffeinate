@@ -4,8 +4,6 @@ caffeinate - 네이버 카페 자동화 (curl_cffi AsyncSession 기반)
     from caffeinate import Caffeinate
     async with Caffeinate() as cafe:
         print(await cafe.cafes.my_cafes())
-
-CLI: python -m caffeinate.cli --help
 """
 from .core import (
     CafeSession,
