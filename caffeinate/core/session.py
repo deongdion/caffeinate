@@ -244,12 +244,17 @@ class CafeSession:
                 site=site,
             )
             started = time.perf_counter()
+            wire: list[tuple[str, str | None]] = list(wire_headers(build_headers(self.fingerprint, ctx)))
+            if body == b"" and not any(k == "content-type" for k, _ in wire):
+                # [실측 2026-11-13 tls.peet.ws] 본문 없는 POST 에 libcurl 이 content-type 을 덧붙이는 것을 막는다
+                # (값 None -> curl 에 "Content-Type:" 로 넘어가 내부 헤더 비활성). 브라우저는 보내지 않는다.
+                wire.append(("content-type", None))
             resp = await self._send_with_retry(
                 session,
                 current_method,
                 full_url,
                 body,
-                wire_headers(build_headers(self.fingerprint, ctx)),
+                wire,
                 timeout,
                 H2_WEIGHT[kind],
             )
@@ -287,7 +292,7 @@ class CafeSession:
         method: HttpMethod,
         url: str,
         body: bytes | None,
-        headers: list[tuple[str, str]],
+        headers: list[tuple[str, str | None]],
         timeout: float | None,
         h2_weight: int,
     ) -> Response:

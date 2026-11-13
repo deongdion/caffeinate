@@ -11,11 +11,11 @@ curl_cffi 설치가 필요 없다. 네이티브 확장(패치한 libcurl-imperso
 
 ```
 # Windows x64
-pip install "caffeinate @ https://github.com/deongdion/caffeinate/releases/download/v0.2.0/caffeinate-0.2.0-cp311-abi3-win_amd64.whl"
+pip install "caffeinate @ https://github.com/deongdion/caffeinate/releases/download/v0.3.0/caffeinate-0.3.0-cp311-abi3-win_amd64.whl"
 # Linux x86_64 (glibc 2.17+)
-pip install "caffeinate @ https://github.com/deongdion/caffeinate/releases/download/v0.2.0/caffeinate-0.2.0-cp311-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl"
+pip install "caffeinate @ https://github.com/deongdion/caffeinate/releases/download/v0.3.0/caffeinate-0.3.0-cp311-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl"
 # macOS arm64 (11.0+)
-pip install "caffeinate @ https://github.com/deongdion/caffeinate/releases/download/v0.2.0/caffeinate-0.2.0-cp311-abi3-macosx_11_0_arm64.whl"
+pip install "caffeinate @ https://github.com/deongdion/caffeinate/releases/download/v0.3.0/caffeinate-0.3.0-cp311-abi3-macosx_11_0_arm64.whl"
 
 python -m camoufox fetch           # Camoufox 브라우저 받기 (약 2.5GB, 대부분 글꼴) - 로그인할 때만 필요
 python -c "import caffeinate.core.curl as c; print(c.BUNDLED)"   # True 면 내장 확장 사용 중
@@ -51,7 +51,7 @@ pip install -e ".[fallback,dev]"   # 개발: + curl_cffi / pytest / ruff / mypy
 ```
 # Windows x64 (필요: VS 2022+ C++ 빌드 도구, cmake, ninja, Git for Windows. 디스크 약 3 GB, 약 6 분)
 powershell -ExecutionPolicy Bypass -File native\build_windows.ps1 -WorkDir D:\cafbuild -CleanIntermediates
-pip install --force-reinstall D:\cafbuild\dist\caffeinate-0.2.0-cp311-abi3-win_amd64.whl
+pip install --force-reinstall D:\cafbuild\dist\caffeinate-0.3.0-cp311-abi3-win_amd64.whl
 
 # Linux / macOS (필요 도구는 스크립트 머리말 참고)
 native/build_unix.sh native/out/lib
@@ -202,6 +202,7 @@ async def main():
         ref = await cafe.articles.write(cafe_id, 1, "제목", "본문\n둘째 줄", images=[img])  # ArticleRef
         cid = await cafe.comments.add(ref, "댓글")                    # -> commentId
         await cafe.comments.reply(ref, cid, "대댓글")
+        await cafe.comments.add(ref, "사진 댓글", image="a.png")      # 경로/bytes(+filename=)/UploadedImage
         await cafe.comments.delete(ref, cid)                          # -> {"msg": "Success"}
         await cafe.articles.update(ref, 1, "새 제목", "새 본문", images=[img])  # 응답 원본 (dict)
         await cafe.likes.like(ref)                                    # unlike(ref) 로 취소
@@ -305,6 +306,33 @@ mypy caffeinate
   - 비회원 요약 글의 `readCount` 는 "4만" 같은 표시 문자열 (`as_count` 로 해석).
   - 오류 코드: 없는 글 404/4003, 없는 카페 400/0010, 멤버 전용 댓글 403/4004, 비멤버 등급 500/40003,
     비로그인 likeIt/members 401/0004 (`NotLoggedInError`).
+- 2026-11-13 Aside 브라우저 UI 캡처 반영:
+  - 좋아요 멤버 다음 페이지는 `?nextTimestamp={앞 응답 result.nextTimestamp}&perPage=10` 커서 -> `likes.all_members()`.
+  - 사진 업로드: 글쓰기 창을 열 때 에디터 초기화 1회, 이미지마다 세션키 재발급 + 업로드. 이미지 파트는 파일 MIME.
+    `photos.upload` 는 에디터 JWT/SE-App-Id 를 (카페, 게시판)별로 10분 재사용한다.
+  - 글 삭제 ArticleDelete.json: 폼 cafeId, articleId, requestFrom=A (menuId 없음) + X-Cafe-Product.
+    댓글 삭제는 menuId 포함. 글쓰기는 게시판에서 새 창 `.../articles/write?boardType=L`.
+  - 게시글/댓글 Referer: 게시판에서 진입한 iframe URL `?menuid=..&referrerAllArticles=false&fromNext=true` (Camoufox 실측).
+  - 좋아요 등록/취소 경로는 Aside 가 번들 분석으로 `apis.naver.com/cafe-web/like/v1/...` 를 제시했지만 라이브 캡처가 아니어서,
+    사람 세션 캡처 + E2E 로 확인된 route-like 경로를 유지한다. -> 아래 Camoufox UI 캡처로 Aside 주장이 틀렸음을 확인.
+- 2026-11-13 Camoufox UI 캡처 (로그인 영구 프로필, context request 이벤트 = <script> JSONP 포함):
+  - 좋아요: 하트 클릭/취소 모두 `route-like.naver.com` <script> JSONP GET 뿐. `apis.naver.com/cafe-web/like/v1/...`
+    (Aside 번들 주장)과 `cafe.like.naver.com` 은 한 번도 호출되지 않았다. 페이지 로드 때
+    `/v1/search/contents?suppress_response_codes=true&callback=jQuery331…_{n}&q=CAFE[cid]&isDuplication=false&cssIds=BASIC_PC,CAFE_PC&pool=cafe&_={n+1}`,
+    클릭 때 `/v1/services/CAFE/contents/{cid}?suppress_response_codes=true&_method=POST&callback=…&displayId=CAFE&…&isPostTimeline=false&_=…`
+    (취소는 `_method=DELETE`, `isPostTimeline` 없음). Referer 는 게시글 iframe URL, Accept `*/*`,
+    sec-fetch-dest `script` / mode `no-cors`, Origin·priority 없음 -> `RequestKind.SCRIPT` 추가,
+    likes 는 jQuery 콜백 이름/`_` 증가 규칙까지 재현하고 status() 도 route-like search 로 바꿨다.
+    클릭 직후 프론트는 gw/v5 likeIt/members (Referer iframe URL) 를 다시 부른다.
+  - 사진 댓글/답글: 파일 선택 즉시 `cafe-mobile/PhotoInfraSessionKey.json` (본문 없는 POST: content-type·X-Cafe-Product 없음,
+    content-length: 0 이 sec-fetch-* 뒤) -> 응답 `message.result` = 세션키 -> `cafe.upphoto.naver.com/{key}/simpleUpload/0`
+    (쿠키 없음, Accept `*/*`, 쿼리 userId, extractExif=false, extractAnimatedCnt=false, autorotate=true,
+    extractDominantColor=false, type=, customQuery=, denyAnimatedImage=false, skipXcamFiltering=false, 파트 name=image + 파일 MIME)
+    -> 등록 시 CommentPost/CommentReply 폼 `content, stickerId, imagePath(path + "/"), imageFileName, imageWidth, imageHeight,
+    [refCommentId], cafeId, articleId, requestFrom=A`. 에디터 JWT 는 쓰지 않는다.
+    `comments.add/reply(..., image=bytes|경로|UploadedImage, filename=)` 로 구현, E2E 로 image_url/부모 관계 확인.
+  - 이번 진입 경로(게시판 목록 f-e 화면에서 글 클릭)의 iframe 쿼리는 `?menuid=1&referrerAllArticles=false&fromNext=true`
+    (boardtype=L 없음) -> endpoints.article_frame_page() 를 이 파이어폭스 값으로 맞춤.
 - 쓰기 실측 검증 (브라우저 캡처 기반, 실제 작성 성공):
   - 글쓰기: `editor/v2.0/cafes/{id}/menus/{menu}/articles` + SmartEditor contentJson (`utils/editor.py`)
   - 이미지: 에디터 JWT -> 사진 세션키 -> `upphoto simpleUpload` (`services/photos.py`)

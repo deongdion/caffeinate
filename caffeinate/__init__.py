@@ -70,7 +70,7 @@ from .utils import html_to_text, parse_cafe_url
 # 라이브러리 관례: 기본으로는 아무것도 출력하지 않는다 (enable_logging() 또는 앱의 logging 설정으로 켠다)
 _logging.getLogger("caffeinate").addHandler(_logging.NullHandler())
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 __all__ = [
     "Article",

@@ -357,3 +357,24 @@ def test_sec_fetch_site() -> None:
     assert sec_fetch_site(API, "https://example.com/") is SecFetchSite.CROSS_SITE
     assert worst_site(SecFetchSite.SAME_ORIGIN, SecFetchSite.CROSS_SITE) is SecFetchSite.CROSS_SITE
     assert worst_site(SecFetchSite.SAME_SITE, SecFetchSite.SAME_ORIGIN) is SecFetchSite.SAME_SITE
+
+
+def test_session_empty_post_disables_curl_content_type() -> None:
+    # [실측 2026-11-13 tls.peet.ws] 본문 없는 XHR POST(PhotoInfraSessionKey.json): 브라우저는 content-type 을
+    # 보내지 않고 content-length: 0 을 sec-fetch-* 뒤에 둔다. libcurl 기본 content-type 은 None 으로 끈다.
+    sent: list[list[tuple[str, str | None]]] = []
+
+    async def fake(self: Any, session: Any, m: Any, url: str, body: Any, headers: Any, *a: Any) -> _Resp:
+        sent.append(list(headers))
+        return _Resp(200)
+
+    async def go() -> None:
+        s = CafeSession(fingerprint=FP, cookies=CookieStore())
+        s._send_with_retry = fake.__get__(s)  # type: ignore[method-assign]
+        await s.request("POST", "https://apis.naver.com/x.json", referer=IFRAME, data="")
+        await s.close()
+
+    asyncio.run(go())
+    names = [k for k, _ in sent[0]]
+    assert names == [*HEAD, "referer", "origin", *SEC, "content-length", "te", "content-type"]
+    assert dict(sent[0])["content-type"] is None and dict(sent[0])["content-length"] == "0"

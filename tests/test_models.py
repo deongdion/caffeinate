@@ -165,3 +165,12 @@ def test_comment_image_and_reply_member() -> None:
 
     c = Comment.from_api({"id": 2, "refId": 1, "isRef": True, "image": {"url": "u"}, "replyMember": {"nick": "n"}})
     assert c.image_url == "u" and c.reply_to_nick == "n" and c.ref_id == 1
+
+
+def test_comment_best_fields() -> None:
+    from caffeinate.models import Comment
+
+    c = Comment.from_api({"id": 5, "refId": 5, "isBest": True, "likeItCount": 7, "replyCount": 2})
+    assert (c.is_best, c.like_count, c.reply_count) == (True, 7, 2)
+    assert Comment.from_api({"id": 6, "bestComment": True}).is_best
+    assert not Comment.from_api({"id": 7}).is_best

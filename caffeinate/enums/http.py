@@ -28,6 +28,9 @@ class RequestKind(StrEnum):
     XHR = "xhr"            # XMLHttpRequest (axios) - 기본
     FETCH = "fetch"        # fetch()
     DOCUMENT = "document"
+    # <script src> 로드 (jQuery JSONP). like 위젯(route-like.naver.com)이 이 방식이다 [실측 2026-11-13 Camoufox UI 캡처].
+    # Accept */*, sec-fetch-dest script / mode no-cors, Origin 없음, priority 없음, h2 weight 22 [실측 2026-11-13 tls.peet.ws]
+    SCRIPT = "script"
 
     @property
     def is_script(self) -> bool:
@@ -50,6 +53,7 @@ class SecFetchMode(StrEnum):
 class SecFetchDest(StrEnum):
     EMPTY = "empty"
     DOCUMENT = "document"
+    SCRIPT = "script"
 
 
 class ReferrerPolicy(StrEnum):

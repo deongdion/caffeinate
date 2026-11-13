@@ -1,10 +1,11 @@
 """댓글/대댓글: 조회, 작성, 삭제"""
 import asyncio
+from pathlib import Path
 from typing import Any
 
 from ..core import endpoints
 from ..core.errors import NaverAPIError, ParseError
-from ..models import ArticleRef, Comment, CommentPage
+from ..models import ArticleRef, Comment, CommentPage, UploadedImage
 from ..utils.parsing import dig
 from .base import BaseService, gw_params
 
@@ -23,6 +24,40 @@ def comment_id_from(resp: Any) -> int:
     raise ParseError(f"댓글 응답에서 commentId 를 찾지 못했습니다: {str(resp)[:200]}")
 
 
+ImageInput = bytes | str | Path | UploadedImage
+
+
+def image_fields(img: UploadedImage | None) -> dict[str, Any]:
+    """사진 댓글 폼 필드 - stickerId 와 refCommentId 사이, 순서까지 캡처값 그대로 [실측 2026-11-13 Camoufox UI 캡처]
+
+    imagePath 는 upphoto 응답 path(파일명 없는 해시 경로) 끝에 "/" 를 붙인 값이다
+    (예: /MjAy.../MDAx...PNG/). imageFileName 은 응답 fileName.
+    """
+    if img is None:
+        return {}
+    path = img.path or img.url.rsplit("/", 1)[0]
+    return {
+        "imagePath": path if path.endswith("/") else f"{path}/",
+        "imageFileName": img.file_name,
+        "imageWidth": img.width,
+        "imageHeight": img.height,
+    }
+
+
+def comment_fields(
+    text: str, sticker_id: str = "", image: UploadedImage | None = None, ref_comment_id: int | None = None
+) -> dict[str, Any]:
+    """CommentPost/CommentReply 폼 앞부분 (뒤에 cafeId, articleId, requestFrom 이 붙는다)
+
+    [실측 2026-11-13 Camoufox UI 캡처] 순서: content, stickerId, [imagePath, imageFileName, imageWidth, imageHeight],
+    [refCommentId], cafeId, articleId, requestFrom=A
+    """
+    fields: dict[str, Any] = {"content": text, "stickerId": sticker_id, **image_fields(image)}
+    if ref_comment_id is not None:
+        fields["refCommentId"] = ref_comment_id
+    return fields
+
+
 class CommentService(BaseService):
     async def page(self, ref: ArticleRef | str, *, page: int = 1, size: int = 100) -> CommentPage:
         """댓글 한 페이지 [실측: result.comments.items, hasNext/hasPrev]
@@ -37,7 +72,7 @@ class CommentService(BaseService):
             # [실측 2026-11-13] 프론트: comments/pages/{n}?requestFrom=A&orderBy=asc
             params=gw_params(r.cafe_id, requestFrom="A", orderBy="asc", size=size),
             headers=dict(endpoints.PRODUCT_HEADERS),  # [실측 2026-11-13] 프론트는 apis/gw XHR 전부에 붙인다
-            referer=endpoints.article_frame_page(r.cafe_id, r.article_id),
+            referer=endpoints.article_frame_page(r.cafe_id, r.article_id, r.menu_id),
         )
         return CommentPage.from_api(dig(data, "result", default={}))
 
@@ -59,28 +94,60 @@ class CommentService(BaseService):
                 break
         return out
 
-    async def add(self, ref: ArticleRef | str, text: str, *, sticker_id: str = "") -> int:
+    async def add(
+        self,
+        ref: ArticleRef | str,
+        text: str,
+        *,
+        sticker_id: str = "",
+        image: ImageInput | None = None,
+        filename: str | None = None,
+    ) -> int:
         """댓글 작성 -> comment_id
 
         [실측 2026-11-13: E2E 성공] cafe-mobile/CommentPost.json (form).
         응답은 플랫 {"commentId": ..., "refCommentId": ...} 이다.
+        image: 사진 댓글 (bytes / 파일 경로 / 이미 올린 UploadedImage). 브라우저처럼
+        PhotoInfraSessionKey -> upphoto 업로드 후 image* 필드를 넣는다 [실측 2026-11-13 Camoufox UI 캡처].
+        bytes 면 filename 으로 파일명을 준다 (기본 image.png).
         """
         self._require_login()
         r = await self._client.articles.resolve(ref)
-        resp = await self._post(endpoints.COMMENT_POST, r, {"content": text, "stickerId": sticker_id})
+        img = await self._image(r, image, filename)
+        resp = await self._post(endpoints.COMMENT_POST, r, comment_fields(text, sticker_id, img))
         return comment_id_from(resp)
 
-    async def reply(self, ref: ArticleRef | str, comment_id: int, text: str, *, sticker_id: str = "") -> int:
+    async def reply(
+        self,
+        ref: ArticleRef | str,
+        comment_id: int,
+        text: str,
+        *,
+        sticker_id: str = "",
+        image: ImageInput | None = None,
+        filename: str | None = None,
+    ) -> int:
         """대댓글 작성 -> comment_id
 
         [실측 2026-11-12: E2E 성공] cafe-mobile/CommentReply.json (refCommentId=부모 댓글).
+        image 는 add() 와 같다 [실측 2026-11-13 Camoufox UI 캡처: 사진 대댓글].
         """
         self._require_login()
         r = await self._client.articles.resolve(ref)
-        resp = await self._post(
-            endpoints.COMMENT_REPLY, r, {"content": text, "stickerId": sticker_id, "refCommentId": comment_id}
-        )
+        img = await self._image(r, image, filename)
+        resp = await self._post(endpoints.COMMENT_REPLY, r, comment_fields(text, sticker_id, img, comment_id))
         return comment_id_from(resp)
+
+    async def _image(self, r: ArticleRef, image: ImageInput | None, filename: str | None) -> UploadedImage | None:
+        """댓글 사진 입력 -> UploadedImage (필요하면 업로드)"""
+        if image is None or isinstance(image, UploadedImage):
+            return image
+        if isinstance(image, bytes):
+            data, name = image, filename or "image.png"
+        else:
+            p = Path(image)
+            data, name = p.read_bytes(), filename or p.name
+        return await self._client.photos.upload_comment_image(r.cafe_id, r.article_id, data, name, menu_id=r.menu_id)
 
     async def delete(self, ref: ArticleRef | str, comment_id: int) -> Any:
         """댓글 삭제 -> 응답 {"msg": "Success"}
@@ -103,7 +170,7 @@ class CommentService(BaseService):
                 "requestFrom": "A",
             },
             headers=dict(endpoints.PRODUCT_HEADERS),  # [실측 2026-11-13 UI 캡처] content-type 바로 뒤
-            referer=endpoints.article_frame_page(r.cafe_id, r.article_id),
+            referer=endpoints.article_frame_page(r.cafe_id, r.article_id, r.menu_id),
         )
 
     async def best(self, ref: ArticleRef | str) -> list[Comment]:
@@ -117,7 +184,7 @@ class CommentService(BaseService):
         data = await self.session.get_json(
             endpoints.best_comments(r.cafe_id, r.article_id),
             headers=dict(endpoints.PRODUCT_HEADERS),  # [실측 2026-11-13] 프론트는 apis/gw XHR 전부에 붙인다
-            referer=endpoints.article_frame_page(r.cafe_id, r.article_id),
+            referer=endpoints.article_frame_page(r.cafe_id, r.article_id, r.menu_id),
         )
         result = dig(data, "result", default={})
         items: list[Any] = []
@@ -146,7 +213,7 @@ class CommentService(BaseService):
                     url,
                     data={**fields, "cafeId": r.cafe_id, "articleId": r.article_id, "requestFrom": "A"},
                     headers=dict(endpoints.PRODUCT_HEADERS),  # [실측 2026-11-13 UI 캡처] content-type 바로 뒤
-                    referer=endpoints.article_frame_page(r.cafe_id, r.article_id),
+                    referer=endpoints.article_frame_page(r.cafe_id, r.article_id, r.menu_id),
                 )
             except NaverAPIError as e:
                 if str(e.code) != "2001" or attempt >= attempts - 1:

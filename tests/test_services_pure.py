@@ -30,3 +30,22 @@ def test_comment_id_from() -> None:
     assert comment_id_from({"commentId": 123, "refCommentId": 0}) == 123
     with pytest.raises(ParseError):
         comment_id_from({"message": {"result": {"commentId": 1}}})
+
+
+def test_like_members_cursor_url() -> None:
+    from caffeinate.core import endpoints
+
+    base = "https://article.cafe.naver.com/gw/v5/cafes/1/articles/2/likeIt/members"
+    assert endpoints.like_members(1, 2) == f"{base}?perPage=10"
+    # [실측 2026-11-13 Aside] 커서가 perPage 보다 앞
+    assert endpoints.like_members(1, 2, 10, 1794461889072) == f"{base}?nextTimestamp=1794461889072&perPage=10"
+
+
+def test_article_frame_page_entry_forms() -> None:
+    from caffeinate.core import endpoints
+
+    base = "https://cafe.naver.com/ca-fe/cafes/1/articles/2"
+    assert endpoints.article_frame_page(1, 2) == f"{base}?fromNext=true"
+    assert endpoints.article_frame_page(1, 2, 3) == (
+        f"{base}?menuid=3&referrerAllArticles=false&fromNext=true"
+    )

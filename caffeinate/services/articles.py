@@ -35,20 +35,28 @@ class ArticleService(BaseService):
             cafe_url=slug if isinstance(slug, str) else None,
         )
 
-    async def get_raw(self, cafe_id: int, article_id: int) -> dict[str, Any]:
-        """gw v4 상세 원본 result (글 + 첫 댓글 페이지 + 내 권한 + 카페 정보)"""
+    async def get_raw(self, cafe_id: int, article_id: int, menu_id: int | None = None) -> dict[str, Any]:
+        """gw v4 상세 원본 result (글 + 첫 댓글 페이지 + 내 권한 + 카페 정보)
+
+        [실측 2026-11-13 Camoufox UI 캡처] 프론트 쿼리: `?query=&menuId={m}&useCafeId=true&requestFrom=A`.
+        게시판 번호를 모르면 menuId 를 뺀다 (서버는 없어도 응답한다).
+        """
+        params: dict[str, str | int] = {"query": ""}
+        if menu_id:
+            params["menuId"] = menu_id
+        params.update(gw_params(cafe_id, requestFrom="A"))
         data = await self.session.get_json(
             endpoints.gw_article(cafe_id, article_id),
-            params=gw_params(cafe_id, requestFrom="A"),
+            params=params,
             headers=dict(endpoints.PRODUCT_HEADERS),  # [실측 2026-11-13] 프론트는 apis/gw XHR 전부에 붙인다
-            referer=endpoints.article_frame_page(cafe_id, article_id),  # [실측 2026-11-13] iframe URL
+            referer=endpoints.article_frame_page(cafe_id, article_id, menu_id),  # [실측 2026-11-13] iframe URL
         )
         return dig(data, "result", default={})
 
     async def get(self, ref: ArticleRef | str) -> Article:
         """게시글 상세 [실측]"""
         r = await self.resolve(ref)
-        return Article.from_api(await self.get_raw(r.cafe_id, r.article_id))
+        return Article.from_api(await self.get_raw(r.cafe_id, r.article_id, r.menu_id))
 
     async def write(
         self,
@@ -105,9 +113,9 @@ class ArticleService(BaseService):
         return await self.session.post_form(
             endpoints.ARTICLE_DELETE,
             data={"cafeId": r.cafe_id, "articleId": r.article_id, "requestFrom": "A"},
-            # [추정] 댓글 계열(cafe-mobile *.json)과 같은 헤더/Referer - ArticleDelete 는 UI 캡처하지 않음
+            # [실측 2026-11-13 Aside 캡처] 폼 cafeId, articleId, requestFrom=A (menuId 없음) + X-Cafe-Product
             headers=dict(endpoints.PRODUCT_HEADERS),
-            referer=endpoints.article_frame_page(r.cafe_id, r.article_id),
+            referer=endpoints.article_frame_page(r.cafe_id, r.article_id, r.menu_id),
         )
 
 

@@ -26,6 +26,9 @@ class Comment:
     is_article_writer: bool = False
     image_url: str = ""          # 사진 댓글 (items[].image.url) [실측 2026-11-13]
     reply_to_nick: str = ""      # 대댓글이 언급한 상대 (items[].replyMember.nick) [실측 2026-11-13]
+    is_best: bool = False        # 베스트 댓글 (gw v4 bestComment / best-comments isBest) [실측 2026-11-13 Aside]
+    like_count: int = 0          # 공감 수 (best-comments likeItCount) [Aside: 앱 번들 파서 근거]
+    reply_count: int = 0         # 답글 수 (best-comments replyCount) [Aside: 앱 번들 파서 근거]
     replies: list["Comment"] = field(default_factory=list)  # build_tree() 로 채움
     raw: JSON = field(default_factory=dict, repr=False, compare=False)
 
@@ -45,6 +48,9 @@ class Comment:
             is_article_writer=bool(d.get("isArticleWriter", False)),
             image_url=str(as_dict(d.get("image")).get("url") or ""),
             reply_to_nick=str(as_dict(d.get("replyMember")).get("nick") or ""),
+            is_best=bool(d.get("isBest") or d.get("bestComment")),
+            like_count=as_int(d.get("likeItCount")),
+            reply_count=as_int(d.get("replyCount")),
             raw=d,
         )
 

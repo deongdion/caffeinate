@@ -93,7 +93,7 @@ class LikeUser:
 class LikeMembers:
     """gw/v5 likeIt/members result [실측 2026-11-13 사람 세션 라이브 응답]
 
-    totalCount > users 수면 더 있음. 다음 페이지 파라미터(nextTimestamp 재사용)는 미검증.
+    totalCount > users 수면 더 있음. 다음 페이지는 next_timestamp 를 커서로 넘긴다 [실측 2026-11-13 Aside 캡처].
     """
 
     cafe_id: int = 0

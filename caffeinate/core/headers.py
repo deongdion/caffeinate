@@ -11,6 +11,10 @@
   fetch() : user-agent, accept, accept-language, accept-encoding, [referer*],
             [작성자 헤더: content-type / x-...], [content-length], [origin], [referer*], [cookie...],
             sec-fetch-dest, sec-fetch-mode, sec-fetch-site, priority(u=4), te
+  <script>: user-agent, accept(*/*), accept-language, accept-encoding, [referer*], [cookie...],
+            sec-fetch-dest(script), sec-fetch-mode(no-cors), sec-fetch-site, te   (origin/priority 없음)
+            [실측 2026-11-13 like 위젯 JSONP UI 캡처 + tls.peet.ws]
+  본문 없는 XHR POST: ..., sec-fetch-site, content-length: 0, te  [실측 2026-11-13 tls.peet.ws]
   문서 이동: user-agent, accept, accept-language, accept-encoding, [referer*],
             [content-type, content-length, origin  <- 폼 POST], [referer*], [cookie...],
             upgrade-insecure-requests, sec-fetch-dest, sec-fetch-mode, sec-fetch-site,
@@ -61,12 +65,14 @@ PRIORITY: Final[dict[RequestKind, str | None]] = {
     RequestKind.XHR: None,          # [실측 2026-11-13] 파이어폭스 XMLHttpRequest 는 priority 를 보내지 않는다
     RequestKind.FETCH: "u=4",
     RequestKind.DOCUMENT: "u=0, i",
+    RequestKind.SCRIPT: None,       # [실측 2026-11-13 tls.peet.ws] 동적 <script> (JSONP) 도 priority 없음
 }
 # [실측 2026-11-13] HTTP/2 HEADERS 프레임 PRIORITY 플래그의 weight (depends_on=0, exclusive=0)
 H2_WEIGHT: Final[dict[RequestKind, int]] = {
     RequestKind.XHR: 22,
     RequestKind.FETCH: 22,
     RequestKind.DOCUMENT: 42,
+    RequestKind.SCRIPT: 22,         # [실측 2026-11-13 tls.peet.ws]
 }
 TE: Final = "trailers"
 
@@ -236,7 +242,9 @@ def build_headers(fp: Fingerprint, ctx: RequestContext) -> dict[str, str]:
         custom.pop(k, None)  # 브라우저가 관리하는 헤더는 작성자가 못 바꾼다 (forbidden header)
     kind = ctx.kind
     site = ctx.site or sec_fetch_site(ctx.url, ctx.referer)
-    default_accept = {RequestKind.XHR: ACCEPT_XHR, RequestKind.FETCH: ACCEPT_FETCH}.get(kind, ACCEPT_DOCUMENT)
+    default_accept = {
+        RequestKind.XHR: ACCEPT_XHR, RequestKind.FETCH: ACCEPT_FETCH, RequestKind.SCRIPT: ACCEPT_FETCH,
+    }.get(kind, ACCEPT_DOCUMENT)
 
     h: dict[str, str] = {
         "user-agent": fp.user_agent,
@@ -261,7 +269,10 @@ def build_headers(fp: Fingerprint, ctx: RequestContext) -> dict[str, str]:
             not ctx.redirected and not eff.downgraded and (eff.explicit or kind is RequestKind.FETCH)
         )
     ctype = custom.pop("content-type", None) or ctx.content_type
-    if ctx.content_length is not None:
+    # [실측 2026-11-13 tls.peet.ws] 본문 없는 XHR POST(xhr.send(null))는 content-length: 0 을
+    # 작성자 헤더 자리가 아니라 sec-fetch-* 뒤(te 앞)에 보낸다. 예: cafe-mobile/PhotoInfraSessionKey.json
+    late_empty_length = ctx.content_length == 0 and kind is RequestKind.XHR and not ctx.redirected
+    if ctx.content_length is not None and not late_empty_length:
         h["content-length"] = str(ctx.content_length)
     if ctx.cookie:
         h["cookie"] = ctx.cookie
@@ -275,7 +286,13 @@ def build_headers(fp: Fingerprint, ctx: RequestContext) -> dict[str, str]:
     author.update(custom)
 
     origin = ctx.origin
-    if kind.is_script:
+    if kind is RequestKind.SCRIPT:
+        # <script src> 는 no-cors GET 이라 Origin 을 보내지 않는다 [실측 2026-11-13 like 위젯 JSONP 캡처]
+        h["sec-fetch-site"] = site if site is not SecFetchSite.NONE else SecFetchSite.SAME_ORIGIN
+        h["sec-fetch-mode"] = SecFetchMode.NO_CORS
+        h["sec-fetch-dest"] = SecFetchDest.SCRIPT
+        origin = None
+    elif kind.is_script:
         h["sec-fetch-site"] = site if site is not SecFetchSite.NONE else SecFetchSite.SAME_ORIGIN
         h["sec-fetch-mode"] = SecFetchMode.CORS
         h["sec-fetch-dest"] = SecFetchDest.EMPTY
@@ -318,6 +335,10 @@ def build_headers(fp: Fingerprint, ctx: RequestContext) -> dict[str, str]:
     else:
         tail = _DOC_TAIL
     ordered.update({k: h[k] for k in tail if k in h and k not in ordered})
+    if late_empty_length:
+        ordered.pop("te", None)
+        ordered["content-length"] = "0"
+        ordered["te"] = TE
     return ordered
 
 
