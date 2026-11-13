@@ -9,17 +9,19 @@ from ..utils.parsing import as_list, dig
 from .base import BaseService
 
 
-def content_ids(ref: ArticleRef) -> tuple[str, str]:
+def content_ids(ref: ArticleRef) -> tuple[str, ...]:
     """like 서비스 cid 후보들 (조회가 비면 다음 후보 사용)
 
-    [실측 2026-11-13 사람 세션 캡처] 브라우저는 {cafeId}_loyaltylife_{articleId} 로 요청하고,
-    기존 실측(E2E 성공)은 {cafeId}_{slug}_{articleId}. 두 네임스페이스가 공존하므로
-    slug 조회가 비면 loyaltylife 로 다시 시도한다.
+    [실측 2026-11-13 사람 세션 캡처] 브라우저는 {cafeId}_{slug}_{articleId} 로 요청하고,
+    slug 는 카페의 참 slug 여야 한다 (별칭/None 이면 조회 결과 없음 - 사람 브라우저는
+    카페 30857348 의 참 slug 인 loyaltylife 로 요청했다). 참 slug 를 모를 때를 대비해
+    loyaltylife 변형을 후보로 남긴다.
     """
-    return (
-        f"{ref.cafe_id}_{ref.cafe_url}_{ref.article_id}",
-        f"{ref.cafe_id}_loyaltylife_{ref.article_id}",
-    )
+    cids: list[str] = []
+    if ref.cafe_url:
+        cids.append(f"{ref.cafe_id}_{ref.cafe_url}_{ref.article_id}")
+    cids.append(f"{ref.cafe_id}_loyaltylife_{ref.article_id}")
+    return tuple(cids)
 
 
 class LikeService(BaseService):
