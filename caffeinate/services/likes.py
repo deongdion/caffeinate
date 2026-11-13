@@ -49,6 +49,7 @@ class LikeService(BaseService):
         return await self._react(ref, reaction, "DELETE")
 
     async def _react(self, ref: ArticleRef | str, reaction: ReactionType, method: str) -> Any:
+        self._require_login()  # 비로그인 좋아요는 gw 조회 단계(401 0004)에서 막히므로 미리 막는다
         r = await self._full_ref(ref)
         cid = content_id(r)
         token, issued_at = await self._guest_token(r)

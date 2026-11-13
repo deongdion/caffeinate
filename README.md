@@ -95,12 +95,23 @@ asyncio.run(main())
   - 이미지: 에디터 JWT -> 사진 세션키 -> `upphoto simpleUpload` (`services/photos.py`)
   - 댓글/대댓글: `cafe-mobile/CommentPost.json` / `CommentReply.json` (form-urlencoded)
 - 남은 문제:
-  - 글 수정(`articles.update`), 연속 댓글(2001 응답은 서버 딜레이, 잠시 후 재시도하면 성공)도 실측 확인.
-  - 이미지 첨부: 본문 이미지 404 문제 해결 (contentJson image.path 에 업로드 응답 <url> 을 넣어야 함, 187번 글로 검증).
-  - 이미지 여러 장: contentJson di.dio 는 텍스트 1개 + 이미지 1개까지만 (이미지마다 넣으면 500), 193번 글로 검증.
+  - 없음 (2026-11-13 실측 마감). 아래는 이번 실측으로 확정된 사실.
+- 쓰기 실측 확정 (2026-11-13):
+  - 다중 이미지 글쓰기: articles.write 로 이미지 3장 직접 등록 성공 (본문 img src 모두 HTTP 200).
+  - 빈 줄 보존: 브라우저는 줄마다 컴포넌트를 만들지 않고 text 컴포넌트 하나의 value 문단 배열에 넣으며,
+    빈 줄은 textNode 값이 빈 문자열인 문단. dio 텍스트 st 는 빈 줄을 건너뛰고 "\n" 으로 잇은 바이트 길이.
+  - 비로그인 쓰기: editor 스택은 500(10004 NaverUser 인증 실패) -> NotLoggedInError 매핑,
+    쿠키가 아예 없으면 서버 요청 전에 로컬에서 막는다.
+  - 댓글 2001("많은 댓글을 연달아 등록할 수 없어요", HTTP 403): Settings.comment_retry_max/delays 로
+    자동 재시도 (기본 2회, 12초 -> 20초). 다른 에러 코드는 재시도 없음.
+  - 스티커 댓글: sticker_id 는 gfmarket proxyStickerList 항목의
+    "{stickerCode}-{imageWidth}-{imageHeight}" (예: motion3d_02-5-185-160), content="" 로 등록.
+  - 게시글 삭제: cafe-mobile/ArticleDelete.json (form-urlencoded). 브라우저 캡처로 URL/메서드 확인,
+    본문(cafeId/articleId/requestFrom=A)은 캡처되지 않아 댓글 폼 규약으로 구성 -> 서버 Success 로 검증 (192~195 삭제).
+  - 카페 등급: cafemain v1.0 cafes/{id}/my?memberDataOptions=NFLEA 확정
+    (memberLevel.level/levelName/config = 다음 등급 조건, memberStat = 활동 통계, 미멤버 500/40003).
   - 게시글 정렬: 서버가 실제로 적용하는 값은 TIME(최신순), LIKE(좋아요순) 두 가지.
   - 좋아요: 4013 문제 해결 (요청 timestamp 에 토큰 발급 응답의 timestamp 를 넣어야 함, 177번 글로 검증).
-  - 카페 등급 후보 API(`members.grade`)는 미확정. 멤버이면 `my_info` 가 members 응답의 등급을 쓴다.
 
 ## 주의
 

@@ -1,7 +1,8 @@
-"""게시글: 식별자 해석, 상세 조회, 글쓰기/수정
+"""게시글: 식별자 해석, 상세 조회, 글쓰기/수정/삭제
 
 글쓰기 [실측 2026-11-12]: apis.cafe.naver.com/editor/v2.0 스택, 본문은 SmartEditor contentJson.
 이미지는 photos.upload() 결과(UploadedImage)를 images 로 넘긴다.
+삭제 [실측 2026-11-13]: cafe-mobile/ArticleDelete.json (브라우저 캡처).
 """
 from typing import Any
 
@@ -58,6 +59,7 @@ class ArticleService(BaseService):
         images: list[UploadedImage] | None = None,
     ) -> ArticleRef:
         """게시글 작성 [실측 2026-11-12: E2E 성공]. 이미지는 본문 뒤에 순서대로 붙는다."""
+        self._require_login()
         data = await self.session.post_json(
             endpoints.editor_write_article(cafe_id, menu_id),
             json_body=_article_payload(cafe_id, menu_id, title, build_content_json(body, images)),
@@ -79,6 +81,7 @@ class ArticleService(BaseService):
         images: list[UploadedImage] | None = None,
     ) -> Any:
         """게시글 수정 [실측 2026-11-12: 성공] 작성과 같은 페이로드 + headId, 본문 전체를 교체한다"""
+        self._require_login()
         r = await self.resolve(ref)
         return await self.session.post_json(
             endpoints.editor_update_article(r.cafe_id, r.article_id),
@@ -87,6 +90,21 @@ class ArticleService(BaseService):
             ),
             headers=dict(endpoints.PRODUCT_HEADERS),
             referer=endpoints.article_page(r.cafe_id, r.article_id, menu_id),
+        )
+
+    async def delete(self, ref: ArticleRef | str) -> Any:
+        """게시글 삭제 [실측 2026-11-13]
+
+        브라우저 흐름: 글 화면 '삭제'(BaseButton--skinGray) -> JS confirm ->
+        cafe-mobile/ArticleDelete.json (form-urlencoded, HTTP 200).
+        본문은 캡처되지 않아 댓글과 같은 cafe-mobile 폼 규약으로 구성했고, 서버 Success 로 검증했다.
+        """
+        self._require_login()
+        r = await self.resolve(ref)
+        return await self.session.post_form(
+            endpoints.ARTICLE_DELETE,
+            data={"cafeId": r.cafe_id, "articleId": r.article_id, "requestFrom": "A"},
+            referer=endpoints.article_page(r.cafe_id, r.article_id),
         )
 
 

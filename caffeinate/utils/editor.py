@@ -24,17 +24,21 @@ def ulid() -> str:
     return stamp + "".join(_CROCKFORD[(rnd >> (5 * i)) & 0x1F] for i in reversed(range(16)))
 
 
-def _text_component(line: str) -> dict[str, Any]:
+def _paragraph(line: str) -> dict[str, Any]:
+    """문단 한 개. 빈 줄은 textNode 값이 빈 문자열인 문단이다 [실측 2026-11-13 브라우저 캡처]"""
+    return {
+        "id": se_id(),
+        "nodes": [{"id": se_id(), "value": line, "@ctype": "textNode"}],
+        "@ctype": "paragraph",
+    }
+
+
+def _text_component(paragraphs: list[dict[str, Any]]) -> dict[str, Any]:
+    """문단 묶음 하나가 text 컴포넌트 하나 (브라우저는 줄마다 컴포넌트를 만들지 않는다)"""
     return {
         "id": se_id(),
         "layout": "default",
-        "value": [
-            {
-                "id": se_id(),
-                "nodes": [{"id": se_id(), "value": line, "@ctype": "textNode"}],
-                "@ctype": "paragraph",
-            }
-        ],
+        "value": paragraphs,
         "@ctype": "text",
     }
 
@@ -73,16 +77,26 @@ def build_content_json(text: str, images: "list[UploadedImage] | None" = None) -
     [실측] di.dio 는 서버 파싱에 필수 (빈 배열이면 500).
     [실측 2026-11-13] dio 는 이미지 개수와 무관하게 텍스트 1개 + 이미지 1개까지만.
     이미지마다 항목을 넣으면 이미지 2장부터 500 (IllegalStateException).
+
+    [실측 2026-11-13 브라우저 캡처] 빈 줄 보존: 줄마다 컴포넌트를 만들지 않고
+    text 컴포넌트 하나의 value 에 문단 배열로 넣으며, 빈 줄은
+    textNode 값이 빈 문자열("" ) 인 문단이 된다.
+    dio 텍스트 항목의 st 는 빈 줄을 건너뛰고 "\n" 으로 잇은 바이트 길이
+    ("첫 줄\\n\\n셋째 줄" -> 18). 빈 줄을 버리면 두 문단으로 저장된다.
     """
     images = images or []
-    lines = [ln for ln in text.replace("\r\n", "\n").split("\n") if ln.strip()] if text else []
-    components = [_text_component(ln) for ln in lines] + [
-        _image_component(img, represent=(i == 0)) for i, img in enumerate(images)
-    ]
+    lines = text.replace("\r\n", "\n").split("\n") if text else []
+    paragraphs = [_paragraph(ln) for ln in lines]
+
+    components: list[dict[str, Any]] = []
+    if paragraphs:
+        components.append(_text_component(paragraphs))
+    components += [_image_component(img, represent=(i == 0)) for i, img in enumerate(images)]
 
     dio: list[dict[str, Any]] = []
     if text:
-        dio.append({"dis": "N", "dia": {"t": 0, "p": 0, "st": len(text.encode("utf-8")), "sk": 1}})
+        joined = "\n".join(ln for ln in lines if ln.strip())
+        dio.append({"dis": "N", "dia": {"t": 0, "p": 0, "st": len(joined.encode("utf-8")), "sk": 1}})
     if images:
         dio.append({"dis": "N", "dia": {"t": 0, "p": 0, "st": 0, "sk": 0}})
 

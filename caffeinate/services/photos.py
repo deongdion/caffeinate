@@ -23,6 +23,7 @@ from .base import BaseService
 class PhotoService(BaseService):
     async def editor_session(self, cafe_id: int, menu_id: int) -> tuple[str, str]:
         """에디터 초기화 -> (JWT 토큰, userId) [실측]"""
+        self._require_login()  # 비로그인이면 500(10004) 대신 로컬에서 NotLoggedInError [실측 2026-11-13]
         data = await self.session.get_json(
             endpoints.editor_init(cafe_id),
             params={"menuId": menu_id, "from": "pc"},

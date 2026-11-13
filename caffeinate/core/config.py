@@ -27,6 +27,10 @@ class Settings:
     proxy: str | None = None
     autosave_cookies: bool = True    # 서버가 갱신한 쿠키를 종료 시 cookies.json 에 반영
 
+    # 댓글 2001 ("많은 댓글을 연달아 등록할 수 없어요") 자동 재시도 [실측 2026-11-13]
+    comment_retry_max: int = 2                     # 2001 재시도 횟수 (총 시도 = 1 + max)
+    comment_retry_delays: tuple[float, ...] = (12.0, 20.0)  # 재시도 직전 대기(초), 부족하면 마지막 값 반복
+
     @property
     def fingerprint_file(self) -> Path:
         return self.profile_dir / "fingerprint.json"

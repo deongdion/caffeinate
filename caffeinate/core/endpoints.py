@@ -42,9 +42,10 @@ PHOTO_SESSION_KEY: Final = "https://platform.editor.naver.com/api/cafepc001/v1/p
 UPPHOTO: Final = "https://cafe.upphoto.naver.com"
 PHINF_DOMAIN: Final = "https://cafeptthumb-phinf.pstatic.net"
 
-# ---- 댓글 작성 [실측] form-urlencoded ----
+# ---- 댓글 작성/게시글 삭제 [실측] form-urlencoded ----
 COMMENT_POST: Final = f"{APIS}/cafe-web/cafe-mobile/CommentPost.json"
 COMMENT_REPLY: Final = f"{APIS}/cafe-web/cafe-mobile/CommentReply.json"
+ARTICLE_DELETE: Final = f"{APIS}/cafe-web/cafe-mobile/ArticleDelete.json"
 
 
 # ---------------------------------------------------------------- 카페/게시판 [실측]
@@ -58,13 +59,13 @@ def cafe_members(cafe_id: int) -> str:
     return f"{_CAFEINFO}/{cafe_id}/members"
 
 
-def cafe_grade_candidates(cafe_id: int) -> tuple[str, ...]:
-    """[미확정] 카페 내 등급 API 후보 - 멤버 상태에서 확정 필요"""
-    return (
-        f"{_CAFEINFO}/{cafe_id}/members/me/grade",
-        f"{_CAFEMAIN}/{cafe_id}/member",
-        f"{_CAFEINFO}/{cafe_id}/members/me",
-    )
+def cafe_my(cafe_id: int) -> str:
+    """카페 내 내 등급/활동 ?memberDataOptions=NFLEA
+
+    [실측 2026-11-13] result.memberLevel{level,levelName,config(다음 등급 조건)},
+    result.memberStat{visitCount,articleCount,commentCount,likeCount}. 미멤버면 500(40003).
+    """
+    return f"{_CAFEMAIN}/{cafe_id}/my"
 
 
 def article_list(cafe_id: int, menu_id: int) -> str:

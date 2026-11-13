@@ -1,8 +1,9 @@
 """회원/작성자 모델"""
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any, Self
 
-from ..utils.parsing import JSON, as_dict, as_int, pick
+from ..utils.parsing import JSON, as_dict, as_int, ms_to_datetime, pick
 
 
 @dataclass(slots=True, kw_only=True)
@@ -93,13 +94,48 @@ class Membership:
 
 
 @dataclass(slots=True, kw_only=True)
+class CafeGrade:
+    """카페 내 내 등급/활동 통계 (cafemain v1.0 cafes/{id}/my ?memberDataOptions=NFLEA)
+
+    [실측 2026-11-13] memberLevel.config 의 needXxxCount 가 다음 등급 조건,
+    memberStat 가 현재 활동 통계. 미멤버면 서버가 500(40003) 을 돌려준다.
+    """
+
+    nickname: str = ""
+    member_key: str = ""
+    joined_at: datetime | None = None
+    level: int = 0
+    level_name: str = ""
+    level_icon_id: int = 0
+    next_level: JSON = field(default_factory=dict)   # 다음 등급 조건 (needXxxCount, levelUpPolicy)
+    stats: JSON = field(default_factory=dict)        # visitCount/articleCount/commentCount/likeCount
+    raw: JSON = field(default_factory=dict, repr=False, compare=False)
+
+    @classmethod
+    def from_api(cls, d: Any) -> Self:
+        d = as_dict(d)
+        lv = as_dict(d.get("memberLevel"))
+        return cls(
+            nickname=str(d.get("nickname") or ""),
+            member_key=str(d.get("memberKey") or ""),
+            joined_at=ms_to_datetime(d.get("joinedAt")),
+            level=as_int(lv.get("level")),
+            level_name=str(lv.get("levelName") or ""),
+            level_icon_id=as_int(lv.get("levelIconId")),
+            next_level=as_dict(lv.get("config")),
+            stats=as_dict(d.get("memberStat")),
+            raw=d,
+        )
+
+
+@dataclass(slots=True, kw_only=True)
 class MyInfo:
     """카페에서의 내 정보 통합"""
 
     cafe_id: int
     identifier: Identifier
     membership: Membership
-    grade: JSON | None = None   # [미확정] 등급 API 확정 전까지 원본 dict
+    grade: CafeGrade | None = None   # 등급/활동 통계 [실측 2026-11-13]
 
     @property
     def user_id(self) -> str:

@@ -2,8 +2,8 @@
 from ..core import endpoints
 from ..core.config import CAFE_SECTION_HOME
 from ..core.errors import NaverAPIError, NotLoggedInError
-from ..models import Identifier, Membership, MyInfo
-from ..utils.parsing import JSON, as_dict, dig
+from ..models import CafeGrade, Identifier, Membership, MyInfo
+from ..utils.parsing import dig
 from .base import BaseService
 
 
@@ -32,18 +32,19 @@ class MemberService(BaseService):
         )
         return Membership.from_api(dig(data, "result"))
 
-    async def grade(self, cafe_id: int) -> JSON | None:
-        """[미확정] 카페 내 등급 - 후보 엔드포인트를 차례로 시도"""
-        for url in endpoints.cafe_grade_candidates(cafe_id):
-            try:
-                data = await self.session.get_json(
-                    url, headers=dict(endpoints.PRODUCT_HEADERS), referer=endpoints.cafe_page(cafe_id)
-                )
-            except NaverAPIError:
-                continue
-            if res := as_dict(dig(data, "result")):
-                return res
-        return None
+    async def grade(self, cafe_id: int) -> CafeGrade:
+        """카페 내 내 등급/활동 통계 [실측 2026-11-13]
+
+        cafemain v1.0 cafes/{id}/my?memberDataOptions=NFLEA - memberLevel(level/levelName/config),
+        memberStat(방문/글/댓글/좋아요). 카페 멤버가 아니면 NaverAPIError(500, 40003).
+        """
+        data = await self.session.get_json(
+            endpoints.cafe_my(cafe_id),
+            params={"memberDataOptions": "NFLEA"},
+            headers=dict(endpoints.PRODUCT_HEADERS),
+            referer=endpoints.cafe_page(cafe_id),
+        )
+        return CafeGrade.from_api(dig(data, "result"))
 
     async def my_info(self, cafe_id: int) -> MyInfo:
         """내 정보 통합: 계정 식별자 + 카페 내 멤버 정보
@@ -55,7 +56,13 @@ class MemberService(BaseService):
         info = MyInfo(cafe_id=cafe_id, identifier=ident, membership=membership)
         if info.is_member:
             if membership.level_name:
-                info.grade = {"level": membership.level, "levelName": membership.level_name}
+                info.grade = CafeGrade(
+                    nickname=membership.cafe_nickname,
+                    member_key=membership.member_key,
+                    level=membership.level,
+                    level_name=membership.level_name,
+                    stats=membership.stats,
+                )
             else:
                 info.grade = await self.grade(cafe_id)
         return info

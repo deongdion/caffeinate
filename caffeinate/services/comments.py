@@ -1,7 +1,9 @@
 """댓글/대댓글: 조회, 작성"""
+import asyncio
 from typing import Any
 
 from ..core import endpoints
+from ..core.errors import NaverAPIError
 from ..models import ArticleRef, Comment, CommentPage
 from ..utils.parsing import dig
 from .base import BaseService, gw_params
@@ -45,8 +47,25 @@ class CommentService(BaseService):
         )
 
     async def _post(self, url: str, r: ArticleRef, fields: dict[str, Any]) -> Any:
-        return await self.session.post_form(
-            url,
-            data={**fields, "cafeId": r.cafe_id, "articleId": r.article_id, "requestFrom": "A"},
-            referer=endpoints.article_page(r.cafe_id, r.article_id),
-        )
+        """댓글 등록 POST. 2001("많은 댓글을 연달아 등록할 수 없어요", HTTP 403) 만 재시도한다.
+
+        [실측 2026-11-13] 연속 등록 시 두 번째부터 2001 이 오고, 약 12초 뒤 같은 요청을 다시
+        보내면 성공한다. 다른 에러 코드는 재시도 없이 그대로 올린다.
+        횟수/대기는 Settings.comment_retry_max / comment_retry_delays.
+        """
+        self._require_login()  # 비로그인 0004 도 서버가 돌려주지만, 쿠키가 아예 없으면 미리 막는다
+        s = self.session.settings
+        attempts = 1 + max(0, s.comment_retry_max)
+        delays = s.comment_retry_delays or (12.0,)
+        for attempt in range(attempts):
+            try:
+                return await self.session.post_form(
+                    url,
+                    data={**fields, "cafeId": r.cafe_id, "articleId": r.article_id, "requestFrom": "A"},
+                    referer=endpoints.article_page(r.cafe_id, r.article_id),
+                )
+            except NaverAPIError as e:
+                if str(e.code) != "2001" or attempt >= attempts - 1:
+                    raise
+                delay = delays[attempt] if attempt < len(delays) else delays[-1]
+                await asyncio.sleep(delay)

@@ -26,7 +26,7 @@ from .errors import NaverAPIError, NetworkError, NotLoggedInError
 from .headers import ACCEPT_ENCODING, RequestContext, build_headers
 
 _REDIRECT_CODES = frozenset({301, 302, 303, 307, 308})
-_LOGIN_ERROR_CODES = frozenset({"0004"})  # gw: "로그인하지 않았습니다"
+_LOGIN_ERROR_CODES = frozenset({"0004", "10004"})  # gw/like: 0004 로그인하지 않음, editor: 10004 NaverUser 인증 실패
 
 
 class CafeSession:
@@ -243,6 +243,10 @@ def _error_info(data: Any) -> tuple[str | None, str | None]:
     res: dict[str, Any] = data["result"] if isinstance(data.get("result"), dict) else data
     msg: dict[str, Any] = data["message"] if isinstance(data.get("message"), dict) else {}
     err: dict[str, Any] = msg["error"] if isinstance(msg.get("error"), dict) else {}
-    code = res.get("errorCode") or err.get("code") or res.get("code")
-    reason = res.get("reason") or err.get("msg") or res.get("message")
+    # editor 스택(apis.cafe.naver.com/editor)은 최상위 error 로 온다 [실측 2026-11-13]
+    top_err: dict[str, Any] = data["error"] if isinstance(data.get("error"), dict) else {}
+    code = res.get("errorCode") or err.get("code") or top_err.get("errorCode") or res.get("code")
+    reason = (
+        res.get("reason") or err.get("msg") or top_err.get("message") or res.get("message")
+    )
     return (str(code) if code else None), (str(reason) if reason else None)
