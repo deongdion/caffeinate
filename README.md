@@ -1,11 +1,13 @@
 # caffeinate - 네이버 카페 자동화 (curl_cffi AsyncSession)
 
-실제 크롬과 같은 TLS/HTTP2 지문, 헤더 순서로 네이버 카페를 다루는 비동기 파이썬 라이브러리.
+로그인은 Camoufox(파이어폭스 기반) 브라우저로 하고, 이후 요청은 그 브라우저와 같은
+TLS/HTTP2 지문, 헤더 순서로 보내는 네이버 카페 비동기 파이썬 라이브러리.
 
 ## 설치
 
 ```
-pip install curl_cffi        # Python 3.11+
+pip install curl_cffi camoufox     # Python 3.11+
+python -m camoufox fetch           # Camoufox 브라우저 받기 (약 2.5GB, 대부분 글꼴)
 ```
 
 ## 구조
@@ -15,31 +17,69 @@ caffeinate/
 ├── __init__.py        공개 API (Caffeinate, 모델, enum, 예외)
 ├── lib.py             Caffeinate 고수준 비동기 클라이언트
 ├── core/              config(Settings) · endpoints · errors · session(AsyncSession)
-│                      headers(크롬 헤더 순서) · cookies(CookieStore) · fingerprint(PC 지문)
+│                      headers(파이어폭스 헤더 순서) · cookies(CookieStore) · fingerprint(지문)
 ├── enums/             browser · http · cafe (MenuType, BoardType, SortBy ...)
 ├── models/            dataclass: Cafe, Board, Article, ArticleSummary, Comment, LikeStatus,
 │                      Identifier/Membership/MyInfo, Cookie, Fingerprint
 ├── services/          cafes · boards · articles · comments · likes · members · photos
-├── auth/              browser(크롬 실행) · cdp(curl_cffi WebSocket) · login(쿠키 수집)
+├── auth/              login (Camoufox 로그인 -> 쿠키 + 지문)
 ├── utils/             parsing(URL/JSON) · html · editor(contentJson) · multipart
-└── profile/           PC별 fingerprint.json / cookies.json  (공유·커밋 금지)
+└── profile/           cookies.json / fingerprint.json / camoufox_preset.json / login_firefox/  (공유·커밋 금지)
 ```
 
 ## 로그인
 
+자동 입력 모드 (아이디/비밀번호를 사람처럼 타이핑해서 직접 로그인):
+
 ```python
 import asyncio
-from caffeinate import Caffeinate
+from caffeinate import Caffeinate, LoginOptions
 
 async def main():
-    # 전용 크롬 프로필로 로그인 창을 띄우고 쿠키를 profile/cookies.json 에 저장
-    async with await Caffeinate.login() as cafe:
+    options = LoginOptions(username="아이디", password="비밀번호")
+    async with await Caffeinate.login(options=options) as cafe:
         print(await cafe.is_logged_in())
 
 asyncio.run(main())
 ```
 
-이후에는 `Caffeinate()` 가 저장된 쿠키를 읽는다. 쿠키가 만료되면 `Caffeinate.login()` 을 다시 호출한다.
+루트 러너로도 실행할 수 있다 (자격증명은 NAVER_ID / NAVER_PASSWORD 환경변수, 없으면 프롬프트):
+
+```
+python login.py            # 자동 입력 모드
+python login.py --manual   # 수동 모드 (창만 띄우고 직접 로그인)
+```
+
+자동 입력 구현 노트 [2026-11 login.js 분석 기반]:
+
+- 네이버 로그인 페이지는 id/pw 필드의 keydown(keyCode) 타이밍과 값 변화를 감시하고, submit 때
+  행동 기반 토큰(wtoken)을 계산해 붙인다. 그래서 `page.fill()` 같은 값 설정은 쓰지 않고,
+  Playwright 실제 키 이벤트(브라우저 입력 파이프라인을 거치는 trusted 이벤트)로 글자마다
+  랜덤 지연(`LoginOptions.type_delay_ms`, 기본 35~150ms)을 두고 입력한다.
+- 마우스 궤적은 Camoufox `humanize=True` (기본)로 움직인다.
+- 행동 점수가 낮아 ncaptcha 챌린지가 뜨면:
+  - headed 모드(기본): 창에서 사람이 풀 때까지 기다린다. 풀면 토큰이 나오며 로그인이 자동으로 이어진다.
+  - headless 모드: LoginError (풀 수 없음).
+- 자격증명 오류는 서버 오류 메시지를 읽어 LoginError 로 바로 알린다. 기기 등록/2단계 인증은
+  자동 진행하지 않고 안내한다 (수동 모드로 한 번 로그인하면 영구 프로필에 기억됨).
+- 대기 중에는 현재 화면을 계속 분류해 보고한다: 2차 인증(QR/SMS/앱 알림)은 안내 후 계속 대기
+  (완료하면 자동 이어짐), 보호모드/이용정지/차단은 화면 내용과 함께 즉시 오류, 모르는 화면은
+  URL/제목/본문 일부를 그대로 출력한다. 타임아웃 시에도 마지막 화면을 표시한다.
+
+수동 모드:
+
+```python
+async with await Caffeinate.login() as cafe:   # 창만 띄우고 사람이 로그인
+    print(await cafe.is_logged_in())
+```
+
+이후에는 `Caffeinate()` 가 저장된 쿠키와 지문을 읽는다. 쿠키가 만료되면 `Caffeinate.login()` 을 다시 호출한다.
+
+- 로그인 브라우저: Camoufox 영구 프로필(`profile/login_firefox`) + PC별 고정 기기 프리셋(`profile/camoufox_preset.json`).
+- 지문: 로그인 때 브라우저가 실제로 보낸 UA / Accept-Language 와 그 버전의 TLS(ja3)를 `fingerprint.json` 에 저장한다.
+  ja3 실측표(`core/fingerprint.py FIREFOX_JA3`)에 없는 버전이면 tls.peet.ws 로 한 번 실측한다.
+- 로그인 쿠키가 있는데 지문이 로그인 브라우저에서 온 것이 아니면 경고한다 (크롬 시절 쿠키 등).
+- `Settings.proxy` 를 쓰면 로그인 브라우저에도 같은 프록시를 건다 (같은 출구 IP).
 
 ## 라이브러리
 
@@ -76,15 +116,16 @@ asyncio.run(main())
 설정은 `Settings(timeout=..., max_retries=..., proxy=..., profile_dir=...)` 로 바꿔 `Caffeinate(settings)` 에 넘긴다.
 전체 예제: `python example.py`
 
-## 브라우저 동일 인식 (2026-11-12 실측)
+## 브라우저 동일 인식 (2026-11-13 실측, Camoufox = Firefox 158)
 
 | 항목 | 방법 | 실측 결과 |
 |---|---|---|
-| TLS / HTTP2 | curl_cffi impersonate (PC별 고정 타겟) | AKAMAI h2 해시 실제 크롬과 동일 |
-| sec-ch-ua | Chromium GREASE 알고리즘을 메이저 버전으로 재현 | 크롬 131/133/157 실값과 일치 |
-| 헤더 순서 | `default_headers=False` + 직접 순서 구성 | XHR GET/POST, 문서 이동 모두 크롬 157과 동일 |
-| 쿠키 | curl jar 미사용, CookieStore 가 크롬 위치에 Cookie 헤더 | 중복 전송 제거 |
-| Referer/Origin | strict-origin-when-cross-origin, CORS 시 Origin | 크롬 규칙 |
+| TLS | curl_cffi `firefox147` + 로그인 브라우저 ja3 덮어쓰기 | ja3 / JA4 / peetprint 동일 (덮어쓰기 없으면 158 이 뺀 암호 2개·그룹 2개 때문에 다름) |
+| HTTP2 | curl_cffi 파이어폭스 타겟 | akamai 지문 동일 |
+| 헤더 순서/값 | `default_headers=False` + 직접 순서 구성 | XMLHttpRequest, fetch GET/POST(JSON/폼/multipart), 문서 이동 모두 동일 |
+| priority | XMLHttpRequest 없음, fetch `u=4`, 문서 `u=0, i` | 카페 API 는 XMLHttpRequest(axios) |
+| 쿠키 | curl jar 미사용, CookieStore 가 파이어폭스 위치에 Cookie 헤더 | 동일 |
+| Referer/Origin | strict-origin-when-cross-origin, POST·CORS 시 Origin | 파이어폭스 규칙 |
 
 ## 상태 메모
 

@@ -5,6 +5,7 @@ caffeinate - 네이버 카페 자동화 (curl_cffi AsyncSession 기반)
     async with Caffeinate() as cafe:
         print(await cafe.cafes.my_cafes())
 """
+from .auth.login import LoginOptions
 from .core import (
     CafeSession,
     CaffeinateError,
@@ -63,6 +64,7 @@ __all__ = [
     "Identifier",
     "LikeStatus",
     "LoginError",
+    "LoginOptions",
     "Membership",
     "MenuType",
     "MyInfo",

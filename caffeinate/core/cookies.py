@@ -3,7 +3,7 @@
 
 curl 내부 쿠키 jar 를 쓰면 Cookie 헤더가 헤더 맨 앞에 붙고, 직접 넣은 Cookie 헤더와
 중복 전송된다 (실측). 그래서 쿠키는 여기서 직접 관리하고 요청마다 Cookie 헤더를
-크롬 위치(accept-language 다음)에 넣는다. 응답의 Set-Cookie 는 update_from_jar 로 반영.
+파이어폭스 위치(origin 다음, sec-fetch-* 앞)에 넣는다. 응답의 Set-Cookie 는 update_from_jar 로 반영.
 """
 import json
 from collections.abc import Iterable, Iterator

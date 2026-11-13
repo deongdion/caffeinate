@@ -1,17 +1,18 @@
-"""브라우저 로그인 / CDP 쿠키 수집"""
-from .browser import BrowserExecutable, find_browsers, free_port, launch
-from .cdp import CdpClient, wait_for_devtools
-from .login import LOGIN_URL, LoginOptions, browser_login, collect_cookies
+"""브라우저 로그인 (Camoufox) -> 쿠키 + 지문"""
+from .login import (
+    LOGIN_URL,
+    LoginOptions,
+    LoginResult,
+    browser_login,
+    load_preset,
+    naver_cookies,
+)
 
 __all__ = [
     "LOGIN_URL",
-    "BrowserExecutable",
-    "CdpClient",
     "LoginOptions",
+    "LoginResult",
     "browser_login",
-    "collect_cookies",
-    "find_browsers",
-    "free_port",
-    "launch",
-    "wait_for_devtools",
+    "load_preset",
+    "naver_cookies",
 ]

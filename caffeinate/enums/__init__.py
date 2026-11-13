@@ -1,5 +1,5 @@
 """열거형 모음"""
-from .browser import BrowserBrand, LoginBrowser, Platform
+from .browser import BrowserBrand, Platform
 from .cafe import (
     ArticleListItemType,
     BoardType,
@@ -15,7 +15,6 @@ __all__ = [
     "BoardType",
     "BrowserBrand",
     "HttpMethod",
-    "LoginBrowser",
     "MenuType",
     "Platform",
     "ReactionType",

@@ -2,10 +2,11 @@
 curl_cffi AsyncSession 기반 네이버 세션
 
 브라우저 동일 인식 전략 (2026-11-12 실측):
-  1) TLS/HTTP2 : curl_cffi impersonate (PC별 고정 타겟) - AKAMAI h2 지문이 실제 크롬과 동일
+  1) TLS/HTTP2 : curl_cffi 파이어폭스 타겟 + 로그인 브라우저(Camoufox)의 ja3 덮어쓰기
+                 [실측 2026-11-13] ja3/ja4/peetprint/akamai 모두 Camoufox 158 과 동일
   2) 헤더      : default_headers=False 로 curl 기본 헤더를 끄고 headers.build_headers 가
-                 실제 크롬 wire 순서대로 구성 (accept-encoding 도 curl 이 앞에 끼워넣지 않도록 직접 지정)
-  3) 쿠키      : curl jar 를 쓰지 않고(discard_cookies) CookieStore 가 크롬 위치에 Cookie 헤더 생성
+                 실제 파이어폭스 wire 순서대로 구성 (accept-encoding 도 curl 이 앞에 끼워넣지 않도록 직접 지정)
+  3) 쿠키      : curl jar 를 쓰지 않고(discard_cookies) CookieStore 가 파이어폭스 위치에 Cookie 헤더 생성
   4) 리다이렉트: 직접 따라가며 hop 마다 쿠키/Fetch Metadata 재계산
 """
 import asyncio
@@ -65,6 +66,7 @@ class CafeSession:
         if self._session is None:
             self._session = AsyncSession(
                 impersonate=self.fingerprint.impersonate,  # type: ignore[arg-type]
+                ja3=self.fingerprint.ja3,                  # TLS 를 로그인 브라우저와 정확히 일치
                 timeout=self.settings.timeout,
                 default_headers=False,
                 proxy=self.settings.proxy,

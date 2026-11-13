@@ -1,9 +1,6 @@
-"""multipart/form-data 인코딩 (크롬 형식 boundary, 헤더 순서를 직접 제어하려고 curl mime 대신 사용)"""
+"""multipart/form-data 인코딩 (파이어폭스 형식 boundary, 헤더 순서를 직접 제어하려고 curl mime 대신 사용)"""
 import secrets
-import string
 from dataclasses import dataclass
-
-_ALNUM = string.ascii_letters + string.digits
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
@@ -14,16 +11,19 @@ class FilePart:
     content_type: str = "application/octet-stream"
 
 
-def chrome_boundary() -> str:
-    """----WebKitFormBoundary + 16자 (크롬/Blink 형식)"""
-    return "----WebKitFormBoundary" + "".join(secrets.choice(_ALNUM) for _ in range(16))
+def browser_boundary() -> str:
+    """----geckoformboundary + 64bit 난수 2개의 16진수 (0 채움 없음, 보통 32자)
+
+    [실측 2026-11-13 Camoufox 158] 예: ----geckoformboundary9f6c59901029aac68e95c14fe74cc0bf
+    """
+    return f"----geckoformboundary{secrets.randbits(64):x}{secrets.randbits(64):x}"
 
 
 def encode_multipart(
     files: list[FilePart], fields: dict[str, str] | None = None
 ) -> tuple[str, bytes]:
     """-> (content-type 헤더 값, 본문 bytes)"""
-    boundary = chrome_boundary()
+    boundary = browser_boundary()
     out = bytearray()
     for name, value in (fields or {}).items():
         out += f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"\r\n\r\n'.encode()

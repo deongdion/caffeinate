@@ -41,5 +41,10 @@ class Settings:
 
     @property
     def login_profile_dir(self) -> Path:
-        """로그인 전용 크롬 사용자 데이터 폴더"""
-        return self.profile_dir / "login_chrome"
+        """로그인 전용 Camoufox 사용자 데이터 폴더 (영구 프로필)"""
+        return self.profile_dir / "login_firefox"
+
+    @property
+    def browser_preset_file(self) -> Path:
+        """PC별로 한 번 고른 Camoufox 기기 프리셋 (로그인 때마다 같은 기기로 보이게)"""
+        return self.profile_dir / "camoufox_preset.json"

@@ -1,18 +1,20 @@
 """
-실제 크롬과 같은 헤더 구성 (순서/값/Fetch Metadata/Referer 정책)
+실제 파이어폭스와 같은 헤더 구성 (순서/값/Fetch Metadata/Referer 정책)
 
-2026-11-12 실측 (Chrome 157, tls.peet.ws HTTP/2 HEADERS 프레임) :
+2026-11-13 실측 (Camoufox = Firefox 158, tls.peet.ws HTTP/2 HEADERS 프레임):
 
-  XHR(fetch) : [content-length], sec-ch-ua-platform, user-agent, sec-ch-ua, [content-type], [커스텀 x-...],
-               sec-ch-ua-mobile, accept, [origin], sec-fetch-site, sec-fetch-mode,
-               sec-fetch-dest, [referer], accept-encoding, accept-language, [cookie], priority
-  문서 이동  : sec-ch-ua, sec-ch-ua-mobile, sec-ch-ua-platform, upgrade-insecure-requests,
-               user-agent, accept, sec-fetch-site, sec-fetch-mode, sec-fetch-user,
-               sec-fetch-dest, [referer], accept-encoding, accept-language, [cookie], priority
+  XHR/fetch  : user-agent, accept, accept-language, accept-encoding, [referer], [content-type],
+               [커스텀 x-...], [content-length], [origin], [cookie],
+               sec-fetch-dest, sec-fetch-mode, sec-fetch-site, [priority], te
+               (priority: XMLHttpRequest 는 없음, fetch() 는 u=4)
+  문서 이동  : user-agent, accept, accept-language, accept-encoding, [referer], [cookie],
+               upgrade-insecure-requests, sec-fetch-dest, sec-fetch-mode, sec-fetch-site,
+               [sec-fetch-user], priority(u=0, i), te
 
-  - 페이지 JS 가 붙인 헤더(content-type, x-cafe-product 등)는 sec-ch-ua 바로 뒤
-  - origin 은 sec-fetch-site 앞. 같은 출처 GET 에는 없고, 교차 출처(CORS)나 POST 에는 붙음
+  - 파이어폭스는 sec-ch-ua 계열을 보내지 않는다
+  - origin 은 같은 출처 GET 에는 없고, POST(같은 출처 포함)와 교차 출처(CORS)에는 붙음
   - Referer 는 strict-origin-when-cross-origin: 교차 출처면 출처(https://host/)만 전송
+  - [추정] 문서 이동 POST 의 content-type/content-length/origin 위치는 XHR 과 같다고 본다 (미실측)
 """
 from dataclasses import dataclass
 from typing import Final
@@ -22,26 +24,22 @@ from ..enums import HttpMethod, RequestKind, SecFetchDest, SecFetchMode, SecFetc
 from ..models.fingerprint import Fingerprint
 
 ACCEPT_ENCODING: Final = "gzip, deflate, br, zstd"
-ACCEPT_XHR: Final = "application/json, text/plain, */*"
-ACCEPT_DOCUMENT: Final = (
-    "text/html,application/xhtml+xml,application/xml;q=0.9,"
-    "image/avif,image/webp,image/apng,*/*;q=0.8,"
-    "application/signed-exchange;v=b3;q=0.7"
-)
-PRIORITY: Final[dict[RequestKind, str]] = {
-    RequestKind.XHR: "u=1, i",
+ACCEPT_XHR: Final = "application/json, text/plain, */*"   # 카페 프론트(axios) 기본값
+ACCEPT_DOCUMENT: Final = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+PRIORITY: Final[dict[RequestKind, str | None]] = {
+    RequestKind.XHR: None,          # [실측] 파이어폭스 XMLHttpRequest 는 priority 를 보내지 않는다
+    RequestKind.FETCH: "u=4",
     RequestKind.DOCUMENT: "u=0, i",
 }
+TE: Final = "trailers"
 
-_XHR_HEAD: Final = ("sec-ch-ua-platform", "user-agent", "sec-ch-ua")
-_XHR_TAIL: Final = (
-    "sec-ch-ua-mobile", "accept", "origin", "sec-fetch-site", "sec-fetch-mode",
-    "sec-fetch-dest", "referer", "accept-encoding", "accept-language", "cookie", "priority",
-)
-_DOC_ORDER: Final = (
-    "sec-ch-ua", "sec-ch-ua-mobile", "sec-ch-ua-platform", "upgrade-insecure-requests",
-    "user-agent", "accept", "sec-fetch-site", "sec-fetch-mode", "sec-fetch-user",
-    "sec-fetch-dest", "referer", "accept-encoding", "accept-language", "cookie", "priority",
+_HEAD: Final = ("user-agent", "accept", "accept-language", "accept-encoding", "referer")
+_BODY: Final = ("content-type",)            # 이 뒤에 커스텀 헤더
+_AFTER_CUSTOM: Final = ("content-length", "origin", "cookie")
+_XHR_TAIL: Final[tuple[str, ...]] = ("sec-fetch-dest", "sec-fetch-mode", "sec-fetch-site", "priority", "te")
+_DOC_TAIL: Final[tuple[str, ...]] = (
+    "upgrade-insecure-requests", "sec-fetch-dest", "sec-fetch-mode", "sec-fetch-site",
+    "sec-fetch-user", "priority", "te",
 )
 
 
@@ -71,7 +69,7 @@ def sec_fetch_site(url: str, initiator: str | None) -> SecFetchSite:
 
 
 def referer_for(url: str, referer: str | None) -> str | None:
-    """strict-origin-when-cross-origin (크롬 기본 Referrer-Policy)"""
+    """strict-origin-when-cross-origin (파이어폭스/크롬 기본 Referrer-Policy)"""
     if not referer:
         return None
     if origin_of(url) == origin_of(referer):
@@ -87,81 +85,61 @@ class RequestContext:
     method: HttpMethod = HttpMethod.GET
     kind: RequestKind = RequestKind.XHR
     referer: str | None = None       # 요청을 일으킨 페이지 URL (정책 적용 전 전체 URL)
-    origin: str | None = None        # 명시하지 않으면 referer 로부터 크롬 규칙대로 유도
+    origin: str | None = None        # 명시하지 않으면 referer 로부터 브라우저 규칙대로 유도
     content_type: str | None = None
-    content_length: int | None = None  # 본문이 있으면 크롬처럼 맨 앞에 (curl 은 맨 뒤에 붙임)
+    content_length: int | None = None  # 본문이 있으면 브라우저 위치에 (curl 은 맨 뒤에 붙임)
     extra: dict[str, str] | None = None
     cookie: str | None = None
     user_activated: bool = True      # 문서 이동이 사용자 클릭/입력으로 일어났는지
 
 
 def build_headers(fp: Fingerprint, ctx: RequestContext) -> dict[str, str]:
-    """크롬과 같은 순서의 헤더 dict (curl 에 그대로 순서대로 전달됨)"""
-    custom: dict[str, str] = {}
-    if ctx.content_type:
-        custom["content-type"] = ctx.content_type
-    for k, v in (ctx.extra or {}).items():
-        custom[k.lower()] = v
-
-    base: dict[str, str] = {
-        "sec-ch-ua": fp.sec_ch_ua,
-        "sec-ch-ua-mobile": fp.sec_ch_ua_mobile,
-        "sec-ch-ua-platform": fp.sec_ch_ua_platform,
-        "user-agent": fp.user_agent,
-        "accept-encoding": ACCEPT_ENCODING,
-        "accept-language": fp.accept_language,
-        "priority": PRIORITY[ctx.kind],
-    }
+    """파이어폭스와 같은 순서의 헤더 dict (curl 에 그대로 순서대로 전달됨)"""
+    custom: dict[str, str] = {k.lower(): v for k, v in (ctx.extra or {}).items()}
+    is_xhr = ctx.kind.is_script
     site = sec_fetch_site(ctx.url, ctx.referer)
-    if ref := referer_for(ctx.url, ctx.referer):
-        base["referer"] = ref
-    if ctx.cookie:
-        base["cookie"] = ctx.cookie
 
-    if ctx.kind is RequestKind.XHR:
-        base["accept"] = custom.pop("accept", ACCEPT_XHR)
-        base["sec-fetch-site"] = site if site is not SecFetchSite.NONE else SecFetchSite.SAME_ORIGIN
-        base["sec-fetch-mode"] = SecFetchMode.CORS
-        base["sec-fetch-dest"] = SecFetchDest.EMPTY
+    h: dict[str, str] = {
+        "user-agent": fp.user_agent,
+        "accept": custom.pop("accept", ACCEPT_XHR if is_xhr else ACCEPT_DOCUMENT),
+        "accept-language": fp.accept_language,
+        "accept-encoding": ACCEPT_ENCODING,
+        "te": TE,
+    }
+    if priority := PRIORITY[ctx.kind]:
+        h["priority"] = priority
+    if ref := referer_for(ctx.url, ctx.referer):
+        h["referer"] = ref
+    if ctype := custom.pop("content-type", None) or ctx.content_type:
+        h["content-type"] = ctype   # 직접 지정한 content-type(multipart 등)도 같은 위치
+    if ctx.content_length is not None:
+        h["content-length"] = str(ctx.content_length)
+    if ctx.cookie:
+        h["cookie"] = ctx.cookie
+
+    if is_xhr:
+        h["sec-fetch-site"] = site if site is not SecFetchSite.NONE else SecFetchSite.SAME_ORIGIN
+        h["sec-fetch-mode"] = SecFetchMode.CORS
+        h["sec-fetch-dest"] = SecFetchDest.EMPTY
         origin = ctx.origin
         if origin is None and ctx.referer and (
             not ctx.method.is_safe or site is not SecFetchSite.SAME_ORIGIN
         ):
             origin = origin_of(ctx.referer)
-        if origin:
-            base["origin"] = origin
-        ordered = _content_length(ctx)
-        ordered.update({k: base[k] for k in _XHR_HEAD if k in base})
-        ordered.update(custom)
-        ordered.update({k: base[k] for k in _XHR_TAIL if k in base})
-        return ordered
+        tail = _XHR_TAIL
+    else:
+        h["upgrade-insecure-requests"] = "1"
+        h["sec-fetch-site"] = site
+        h["sec-fetch-mode"] = SecFetchMode.NAVIGATE
+        if ctx.user_activated:
+            h["sec-fetch-user"] = "?1"
+        h["sec-fetch-dest"] = SecFetchDest.DOCUMENT
+        origin = ctx.origin if not ctx.method.is_safe else None
+        tail = _DOC_TAIL
+    if origin:
+        h["origin"] = origin
 
-    base["accept"] = custom.pop("accept", ACCEPT_DOCUMENT)
-    base["upgrade-insecure-requests"] = "1"
-    base["sec-fetch-site"] = site
-    base["sec-fetch-mode"] = SecFetchMode.NAVIGATE
-    if ctx.user_activated:
-        base["sec-fetch-user"] = "?1"
-    base["sec-fetch-dest"] = SecFetchDest.DOCUMENT
-    if ctx.origin and not ctx.method.is_safe:
-        base["origin"] = ctx.origin
-    ordered = _content_length(ctx)
-    ordered.update({k: base[k] for k in _DOC_ORDER if k in base})
-    if "origin" in base:
-        ordered = _insert_before(ordered, "sec-fetch-site", "origin", base["origin"])
+    ordered: dict[str, str] = {k: h[k] for k in (*_HEAD, *_BODY) if k in h}
     ordered.update(custom)
+    ordered.update({k: h[k] for k in (*_AFTER_CUSTOM, *tail) if k in h})
     return ordered
-
-
-def _content_length(ctx: RequestContext) -> dict[str, str]:
-    return {"content-length": str(ctx.content_length)} if ctx.content_length is not None else {}
-
-
-def _insert_before(d: dict[str, str], anchor: str, key: str, value: str) -> dict[str, str]:
-    out: dict[str, str] = {}
-    for k, v in d.items():
-        if k == anchor:
-            out[key] = value
-        out[k] = v
-    out.setdefault(key, value)
-    return out
