@@ -61,10 +61,18 @@ _STAY_CHECKBOX = "#loginStay"
 _STAY_LABEL_TEXT = "로그인 상태 유지"
 
 # nid.naver.com 에서 나올 수 있는 화면 분류 마커 [2026-11 실측].
-# 2차 인증류: 계속 대기 (인증 완료 -> 로그인 자동 이어짐)
+# 2차 인증류: 계속 대기 (인증 완료 -> 로그인 자동 이어짐) [실측: 알림 승인형 화면]
 _AUTH_MARKERS = ("2단계", "인증번호", "QR", "OTP", "휴대폰", "알림 발송", "설정한 기기", "본인 확인", "본인확인")
-# 계정 상태 문제류: 즉시 중단 (화면 내용을 오류에 담는다)
-_FATAL_MARKERS = ("이용정지", "사용정지", "정지된", "휴면", "보호 모드", "보호모드", "접근 제한", "차단되었")
+# 자격증명 오류 [2026-11 실측: 존재하지 않는 아이디/틀린 비밀번호 모두 동일 문구,
+#   .form_message.error = "아이디 또는 비밀번호가 올바르지 않습니다. 입력한 정보를 다시 확인해 주세요."]
+# 계정 상태 화면 URL [2026-11 실측: 익명 접근 200 - 경로 실존 확인]
+_PROTECTION_PATH = "/user2/help/idSafetyRelease"   # 보호모드(아이디 보호) 화면
+_RESTRICTION_PATH = "/user2/help/idRelease"        # 로그인 제한(본인 확인 필요) 화면
+# 아래 본문 마커는 레퍼런스 프로젝트 기준 [미검증] - URL 이 1차 판정, 본문은 보조
+_PROTECTION_TEXT = "회원님의 아이디를 보호하고 있습니다."
+_BANNED_TEXT = "영구제한"
+_RESTRICTION_TEXT = "로그인 제한 해제"
+# 구버전 V2 캡차(#captchaimg/#chptcha)는 기본 템플릿에 없음 [실측] - 실패 반복 시 등장 가능성, 감지만 함
 # 기본 로그인 폼 판별용: 2FA 화면도 frmNIDLogin 을 재사용하므로 폼 존재만으론 판단 불가 [실측]
 _FORM_BODY_MARKER = "아이디 또는 전화번호"
 
@@ -189,12 +197,13 @@ _PAGE_STATE_JS = """
   const errors = Array.from(document.querySelectorAll('.form_message.error'))
     .filter(vis).map((el) => (el.textContent || '').trim()).filter(Boolean);
   const challenge = Array.from(
-    document.querySelectorAll('[id^="ncaptcha-iframe"], [class*="captcha" i]')
-  ).some(vis);
+    document.querySelectorAll('[id^="ncaptcha-iframe"], [class*="captcha" i], #captchaimg, #chptcha')
+  ).some(vis) || location.href.indexOf('rcaptcha') !== -1;
   const inputs = Array.from(document.querySelectorAll('input'))
     .filter(vis).map((el) => el.type + ':' + (el.id || el.name || '?')).slice(0, 12);
   return {
     url: location.href,
+    path: location.pathname,
     onNid: location.hostname === 'nid.naver.com',
     hasForm: !!document.getElementById('frmNIDLogin'),
     error: errors.join(' / '),
@@ -226,16 +235,25 @@ def _screen_text(state: dict[str, Any]) -> str:
 
 
 def _classify_state(state: dict[str, Any]) -> str:
-    """화면 분류: challenge / fatal / auth / form / other
+    """화면 분류: challenge / protected / restricted / banned / auth / form / other
 
     2FA 화면도 frmNIDLogin 을 재사용하므로 hasForm 만으론 폼을 판단하지 않는다.
     본문에 로그인 폼 고유 문구("아이디 또는 전화번호")가 있을 때만 form 으로 본다.
     """
     if state.get("challenge"):
         return "challenge"
+    path = str(state.get("path", ""))
+    if _PROTECTION_PATH in path:
+        return "protected"
+    if _RESTRICTION_PATH in path:
+        return "restricted"
     text = f"{state.get('title', '')} {state.get('bodyText', '')}"
-    if any(m in text for m in _FATAL_MARKERS):
-        return "fatal"
+    if _BANNED_TEXT in text:
+        return "banned"
+    if _PROTECTION_TEXT in text:
+        return "protected"
+    if _RESTRICTION_TEXT in text:
+        return "restricted"
     if state.get("hasForm") and _FORM_BODY_MARKER in str(state.get("bodyText", "")):
         return "form"
     if any(m in text for m in _AUTH_MARKERS):
@@ -365,8 +383,13 @@ async def browser_login(
                                     on_status("       (승인한 브라우저는 다음부터 2단계 인증 없이 로그인됩니다. 안 오면 창에서 '알림 다시 보내기' 또는 OTP 이용)")
                                 else:
                                     on_status("       휴대폰/앱에서 인증을 완료하면 자동으로 이어집니다.")
-                            elif kind == "fatal":
-                                raise LoginError(f"로그인 불가 상태 감지: {_screen_text(state)}")
+                            elif kind in ("protected", "restricted", "banned"):
+                                label = {"protected": "보호모드(아이디 보호)", "restricted": "로그인 제한(본인 확인 필요)",
+                                         "banned": "영구제한"}[kind]
+                                raise LoginError(
+                                    f"[{label}] 로그인할 수 없는 상태입니다. 본인 인증/해제 후 다시 시도하세요.\n"
+                                    f"  화면: {_screen_text(state)}"
+                                )
                             else:
                                 on_status(f"[상태] {_screen_text(state)}")
                     if loop.time() >= next_beat:
