@@ -9,6 +9,7 @@
 """
 import json
 import sys
+import time
 
 FIRST_STREAM = 3
 WINDOW_UPDATE = 12_451_840
@@ -37,7 +38,12 @@ def main() -> int:
 
     opts = {CurlOpt.HTTP2_INITIAL_STREAM_ID: FIRST_STREAM, CurlOpt.HTTP2_STREAM_WINDOW_UPDATE: WINDOW_UPDATE}
     last_err: Exception | None = None
-    for _ in range(3):  # third-party server: retry transient failures
+    # third-party server: retry transient failures with backoff
+    # (v0.3.0 CI: one Linux job failed 3 immediate retries within 2 s on "Could not connect")
+    for attempt, wait in enumerate((0, 5, 15, 30, 60)):
+        if wait:
+            print(f"retry {attempt} in {wait}s after: {last_err!r}")
+            time.sleep(wait)
         try:
             with Session(impersonate="firefox147", curl_options=opts, timeout=30) as s:
                 r = s.post("https://tls.peet.ws/api/all", data=b"caffeinate-smoke-test")
