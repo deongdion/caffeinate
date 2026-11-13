@@ -20,6 +20,7 @@ import binascii
 import mimetypes
 import time
 import uuid
+from collections.abc import Iterable
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -28,7 +29,7 @@ from ..core.errors import NaverAPIError
 from ..models import UploadedImage
 from ..utils.multipart import FilePart, encode_multipart
 from ..utils.parsing import as_dict, dig
-from .base import BaseService
+from .base import BaseService, CafeLike, ImageLike, image_source
 
 if TYPE_CHECKING:
     from ..lib import Caffeinate
@@ -39,6 +40,9 @@ _EDITOR_TTL = 600.0
 
 
 class PhotoService(BaseService):
+    """이미지 업로드 (`cafe.photos`). 보통은 articles.write(images=...) / comments.add(image=...) 가
+    알아서 부르므로 직접 쓸 일은 적다. cafe_id 인자는 숫자 ID / slug / 카페 URL 모두 받는다."""
+
     def __init__(self, client: "Caffeinate") -> None:
         super().__init__(client)
         # (cafe_id, menu_id) -> (token, user_id, app_id, 발급 시각)
@@ -55,14 +59,15 @@ class PhotoService(BaseService):
         self._editor[key] = (token, user_id, app_id, time.monotonic())
         return token, user_id, app_id
 
-    async def editor_session(self, cafe_id: int, menu_id: int) -> tuple[str, str]:
-        """에디터 초기화 -> (JWT 토큰, userId) [실측]"""
+    async def editor_session(self, cafe_id: CafeLike, menu_id: int) -> tuple[str, str]:
+        """에디터 초기화 -> (JWT 토큰, userId) [실측]. 글쓰기 창을 여는 것과 같다 (로그인 필요)"""
         self._require_login()  # 비로그인이면 500(10004) 대신 로컬에서 NotLoggedInError [실측 2026-11-13]
+        cid = await self._cafe_id(cafe_id)
         data = await self.session.get_json(
-            endpoints.editor_init(cafe_id),
+            endpoints.editor_init(cid),
             params={"menuId": menu_id, "from": "pc"},
             headers=dict(endpoints.PRODUCT_HEADERS),
-            referer=endpoints.write_page(cafe_id, menu_id),
+            referer=endpoints.write_page(cid, menu_id),
         )
         res = dig(data, "result")
         token = dig(res, "token")
@@ -71,13 +76,19 @@ class PhotoService(BaseService):
             raise NaverAPIError("에디터 토큰 발급 실패 (글쓰기 권한/로그인 확인)", body=str(data)[:500])
         return str(token), str(user_id or "")
 
-    async def editor_token(self, cafe_id: int, menu_id: int) -> str:
+    async def editor_token(self, cafe_id: CafeLike, menu_id: int) -> str:
+        """에디터 JWT 토큰만 -> str (editor_session 의 첫 값)"""
         token, _ = await self.editor_session(cafe_id, menu_id)
         return token
 
     async def session_key(
-        self, cafe_id: int, menu_id: int, *, token: str | None = None, app_id: str | None = None
+        self, cafe_id: CafeLike, menu_id: int, *, token: str | None = None, app_id: str | None = None
     ) -> str:
+        """글쓰기 사진 업로드 세션키 -> str (업로드마다 새로 받는다)
+
+        - token / app_id: 에디터 JWT / SE-App-Id (없으면 새로 만든다)
+        """
+        cafe_id = await self._cafe_id(cafe_id)
         token = token or await self.editor_token(cafe_id, menu_id)
         data = await self.session.get_json(
             endpoints.PHOTO_SESSION_KEY,
@@ -94,11 +105,18 @@ class PhotoService(BaseService):
             raise NaverAPIError("사진 세션키 발급 실패", body=str(data)[:500])
         return str(key)
 
-    async def upload(self, cafe_id: int, menu_id: int, data: bytes, filename: str = "image.png") -> UploadedImage:
-        """이미지 1장 업로드 -> articles.write(images=[...]) 에 넘길 UploadedImage
+    async def upload(
+        self, cafe_id: CafeLike, menu_id: int, data: bytes, filename: str = "image.png"
+    ) -> UploadedImage:
+        """글쓰기용 이미지 1장 업로드 -> UploadedImage (articles.write/update(images=[...]) 에 넘길 수 있음)
+
+        - data / filename: 이미지 바이트 / 파일명 (MIME 은 확장자, 없으면 파일 시그니처로)
 
         [실측 2026-11-12] 쿼리는 브라우저 업로더 캡처값 그대로 (_upload_query).
+
+            img = await cafe.photos.upload("deongdion", 1, png_bytes, "a.png")
         """
+        cafe_id = await self._cafe_id(cafe_id)
         token, user_id, app_id = await self._editor_state(cafe_id, menu_id)
         try:
             key = await self.session_key(cafe_id, menu_id, token=token, app_id=app_id)
@@ -131,8 +149,8 @@ class PhotoService(BaseService):
         )
 
     # ------------------------------------------------------------ 댓글 사진
-    async def comment_session_key(self, cafe_id: int, article_id: int, menu_id: int | None = None) -> str:
-        """댓글 사진 업로드 세션키 [실측 2026-11-13 Camoufox UI 캡처]
+    async def comment_session_key(self, cafe_id: CafeLike, article_id: int, menu_id: int | None = None) -> str:
+        """댓글 사진 업로드 세션키 -> str [실측 2026-11-13 Camoufox UI 캡처]
 
         댓글 입력창에서 파일을 고르는 즉시 프론트가 보내는 요청:
         POST apis.naver.com/cafe-web/cafe-mobile/PhotoInfraSessionKey.json - 본문 없음(content-length: 0),
@@ -140,6 +158,7 @@ class PhotoService(BaseService):
         응답 {"message": {"status": "200", "error": {...}, "result": "<세션키>"}}. 업로드마다 새로 받는다.
         """
         self._require_login()
+        cafe_id = await self._cafe_id(cafe_id)
         data = await self.session.post_form(
             endpoints.COMMENT_PHOTO_SESSION_KEY,
             data="",  # 본문 없는 POST (xhr.send(null)) -> content-length: 0
@@ -151,14 +170,18 @@ class PhotoService(BaseService):
         return key
 
     async def upload_comment_image(
-        self, cafe_id: int, article_id: int, data: bytes, filename: str = "image.png", *, menu_id: int | None = None
+        self, cafe_id: CafeLike, article_id: int, data: bytes, filename: str = "image.png", *,
+        menu_id: int | None = None,
     ) -> UploadedImage:
-        """댓글용 이미지 1장 업로드 -> comments.add/reply(image=...) 에 넘길 UploadedImage
+        """댓글용 이미지 1장 업로드 -> UploadedImage (comments.add/reply(image=...) 에 넘길 수 있음)
+
+        comments.add/reply 에 bytes/경로를 바로 넘기면 이 메서드를 알아서 부른다.
 
         [실측 2026-11-13 Camoufox UI 캡처] PhotoInfraSessionKey.json -> POST cafe.upphoto.naver.com/{key}/simpleUpload/0
         (쿠키 없음, Accept */*, X-Cafe-Product 없음, Referer 게시글 iframe URL). 쿼리는 글쓰기 업로더와 다르다
         (_comment_upload_query). userId 는 세션키 안에 들어 있는 값을 쓴다.
         """
+        cafe_id = await self._cafe_id(cafe_id)
         key = await self.comment_session_key(cafe_id, article_id, menu_id)
         user_id = user_id_from_session_key(key)
         if not user_id:
@@ -168,9 +191,35 @@ class PhotoService(BaseService):
             referer=endpoints.article_frame_page(cafe_id, article_id, menu_id),
         )
 
-    async def upload_file(self, cafe_id: int, menu_id: int, path: str | Path) -> UploadedImage:
+    async def upload_file(self, cafe_id: CafeLike, menu_id: int, path: str | Path) -> UploadedImage:
+        """글쓰기용 이미지 파일 1장 업로드 -> UploadedImage (파일명은 경로의 이름)
+
+            img = await cafe.photos.upload_file("deongdion", 1, "a.png")
+        """
         p = Path(path)
         return await self.upload(cafe_id, menu_id, p.read_bytes(), p.name)
+
+    async def upload_many(
+        self, cafe_id: CafeLike, menu_id: int, images: Iterable[ImageLike]
+    ) -> list[UploadedImage]:
+        """글쓰기용 이미지 여러 장 -> list[UploadedImage] (입력 순서 유지)
+
+        - images: UploadedImage(그대로 사용) / bytes / 파일 경로(str, Path) / (bytes, 파일명) 튜플 섞어서 가능
+
+        브라우저처럼 한 장씩 순서대로 올린다 (에디터 JWT 는 (카페, 게시판)별로 재사용).
+        articles.write/update(images=...) 가 내부에서 이 메서드를 쓴다.
+        """
+        out: list[UploadedImage] = []
+        cid: int | None = None
+        for item in images:
+            if isinstance(item, UploadedImage):
+                out.append(item)
+                continue
+            if cid is None:
+                cid = await self._cafe_id(cafe_id)
+            data, name = image_source(item)
+            out.append(await self.upload(cid, menu_id, data, name))
+        return out
 
 
 _MAGIC_MIME: tuple[tuple[bytes, str], ...] = (

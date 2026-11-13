@@ -8,8 +8,9 @@ caffeinate 고수준 비동기 클라이언트
         async with Caffeinate() as cafe:
             for c in await cafe.cafes.my_cafes():
                 print(c.cafe_id, c.name)
-            boards = await cafe.boards.all(18886295)
-            page = await cafe.boards.articles(18886295, 2)
+            boards = await cafe.boards.all("remonterace")          # 카페 ID / slug / URL 모두 가능
+            async for a in cafe.boards.iter_articles("remonterace", 2, limit=40):
+                print(a.subject)
             article = await cafe.articles.get("https://cafe.naver.com/f-e/cafes/30857348/articles/368535")
             comments = await cafe.comments.all(article.ref)
 
@@ -19,6 +20,10 @@ caffeinate 고수준 비동기 클라이언트
 
     import caffeinate
     article = caffeinate.run(lambda cafe: cafe.articles.get(URL))
+
+요청 간격 (대량 작업):
+
+    Caffeinate(Settings(min_request_interval=1.0))   # 모든 요청 시작 시각을 1초 이상 벌린다
 
 디버그 로그 (요청/재시도 원인 추적):
 
@@ -55,13 +60,19 @@ class Caffeinate:
     """
     네이버 카페 클라이언트. 기능은 서비스 속성으로 나뉜다.
 
-    - cafes    : 내 카페 목록, 카페 ID 해석
-    - boards   : 게시판 목록, 게시글 목록, 공지
-    - articles : 게시글 URL 해석, 상세, 글쓰기/수정
-    - photos   : 글쓰기용 이미지 업로드
-    - comments : 댓글/대댓글 조회, 작성
-    - likes    : 좋아요 상태/등록/취소
-    - members  : 로그인 식별자, 가입 여부, 내 정보
+    - cafes    : 내 카페 목록, 카페 ID 해석 (slug -> ID 는 클라이언트에 캐시)
+    - boards   : 게시판 목록, 게시글 목록(페이지 / iter_articles), 공지
+    - articles : 게시글 URL 해석, 상세, 글쓰기/수정/삭제 (images= 자동 업로드)
+    - photos   : 이미지 업로드
+    - comments : 댓글/대댓글 조회(page / all / iter), 작성, 삭제
+    - likes    : 좋아요 상태/등록/취소, 누른 멤버
+    - members  : 로그인 식별자, 가입 여부, 등급, 내 정보
+
+    카페를 받는 인자(cafe_id)는 숫자 ID, 숫자 문자열, slug("remonterace"), 카페 URL 을 모두 받는다 (CafeLike).
+
+    - settings   : Settings (타임아웃/재시도/프록시/프로필 폴더/요청 간격). 없으면 기본값
+    - fingerprint: 지문 직접 지정 (없으면 프로필의 fingerprint.json)
+    - cookies    : 쿠키 직접 지정 (없으면 프로필의 cookies.json)
     """
 
     def __init__(
@@ -75,6 +86,7 @@ class Caffeinate:
         if isinstance(cookies, list):
             cookies = CookieStore(cookies)
         self.session = CafeSession(self.settings, fingerprint=fingerprint, cookies=cookies)
+        self._cafe_ids: dict[str, int] = {}  # slug(소문자) -> cafeId 캐시 (cafes.id_from_slug)
         logger.debug(
             "Caffeinate 생성: 프로필=%s, 로그인 쿠키=%s, 지문=%s %s (%s)",
             self.settings.profile_dir,
@@ -121,6 +133,7 @@ class Caffeinate:
     # ---------------------------------------------------------------- 편의
     @property
     def fingerprint(self) -> Fingerprint:
+        """요청에 쓰는 브라우저 지문 (UA/언어/TLS)"""
         return self.session.fingerprint
 
     @property
@@ -143,6 +156,11 @@ class Caffeinate:
         options.username/password 를 주면 사람처럼 타이핑해서 자동 입력한다 (auth.login 모듈 설명 참고).
         옵션이 없으면 창만 띄우고 사람이 로그인한다(수동 모드).
         지문(UA/언어/TLS)은 로그인한 브라우저에서 유도해 profile/fingerprint.json 에 함께 저장한다.
+        한 번 로그인하면 이후에는 `Caffeinate()` 가 저장된 쿠키를 읽는다.
+
+            opts = LoginOptions(username=os.environ["NAVER_ID"], password=os.environ["NAVER_PASSWORD"])
+            async with await Caffeinate.login(options=opts) as cafe: ...
+            async with await Caffeinate.login() as cafe: ...          # 수동 모드
         """
         settings = settings or Settings()
         logger.info("브라우저 로그인 시작 (프로필: %s)", settings.profile_dir)

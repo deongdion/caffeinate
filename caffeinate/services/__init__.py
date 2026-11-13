@@ -1,6 +1,6 @@
 """기능별 API 서비스"""
 from .articles import ArticleService
-from .base import BaseService
+from .base import BaseService, CafeLike, ImageLike
 from .boards import BoardService
 from .cafes import CafeService
 from .comments import CommentService
@@ -12,8 +12,10 @@ __all__ = [
     "ArticleService",
     "BaseService",
     "BoardService",
+    "CafeLike",
     "CafeService",
     "CommentService",
+    "ImageLike",
     "LikeService",
     "MemberService",
     "PhotoService",

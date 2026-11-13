@@ -9,6 +9,8 @@ from ..utils.parsing import JSON, as_dict, as_int, as_list, ms_to_datetime
 
 @dataclass(slots=True, kw_only=True)
 class Reaction:
+    """반응 하나 (좋아요 등): 전체 수와 내가 눌렀는지"""
+
     reaction_type: str
     count: int = 0
     is_reacted: bool = False
@@ -16,7 +18,10 @@ class Reaction:
 
 @dataclass(slots=True, kw_only=True)
 class LikeStatus:
-    """like 서비스 /v1/search/contents 의 contents[0]"""
+    """좋아요 상태: likes.status() (search contents[0]) / likes.like()·unlike() (등록·취소 응답) 결과
+
+    like_count / liked 로 좋아요 수와 내가 눌렀는지를 바로 본다. 다른 반응은 get(ReactionType...).
+    """
 
     content_id: str
     is_display: bool = True
@@ -24,15 +29,18 @@ class LikeStatus:
     raw: JSON = field(default_factory=dict, repr=False, compare=False)
 
     def get(self, reaction: ReactionType | str = ReactionType.LIKE) -> Reaction | None:
+        """반응 종류별 Reaction (없으면 None)"""
         return next((r for r in self.reactions if r.reaction_type == str(reaction)), None)
 
     @property
     def like_count(self) -> int:
+        """좋아요 수"""
         r = self.get(ReactionType.LIKE)
         return r.count if r else 0
 
     @property
     def liked(self) -> bool:
+        """내가(로그인 계정) 좋아요를 눌렀는지"""
         r = self.get(ReactionType.LIKE)
         return bool(r and r.is_reacted)
 
@@ -51,6 +59,26 @@ class LikeStatus:
                 for r in map(as_dict, as_list(c.get("reactions")))
             ],
             raw=c,
+        )
+
+    @classmethod
+    def from_reaction(cls, d: Any, content_id: str = "", reaction: ReactionType | str = ReactionType.LIKE) -> Self:
+        """등록/취소 응답 {"contentsId", "reactionType", "count", "isReacted", ...} -> 반응 1개짜리 LikeStatus
+
+        [실측 2026-11-13] 예: {'contentsId': '31547053_deongdion_197', 'reactionType': 'like', 'count': 1, 'isReacted': True}
+        """
+        d = as_dict(d)
+        return cls(
+            content_id=str(d.get("contentsId") or content_id),
+            is_display=bool(d.get("isDisplay", True)),
+            reactions=[
+                Reaction(
+                    reaction_type=str(d.get("reactionType") or reaction),
+                    count=as_int(d.get("count")),
+                    is_reacted=bool(d.get("isReacted", False)),
+                )
+            ],
+            raw=d,
         )
 
 

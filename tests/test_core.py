@@ -15,6 +15,7 @@ from caffeinate import (
     NetworkError,
     NotLoggedInError,
     ParseError,
+    RateLimitedError,
     Settings,
 )
 from caffeinate.core import config
@@ -32,7 +33,7 @@ def test_not_logged_in_message_tells_user_to_relogin() -> None:
     e = NotLoggedInError("API 오류 401: https://x (0004 로그인하지 않음)", 401, "{}", "0004")
     text = str(e)
     assert text.startswith("API 오류 401")
-    assert "다시 로그인" in text and "login.py" in text
+    assert "다시 로그인" in text and "Caffeinate.login(" in text and "login.py" not in text
     assert e.status == 401 and e.code == "0004"
     assert "status=401" in repr(e)
 
@@ -104,7 +105,7 @@ def test_parse_json_ok() -> None:
     [
         (401, {"result": {"errorCode": "0004", "reason": "로그인"}}, NotLoggedInError, "0004"),
         (500, {"error": {"errorCode": "10004", "message": "NaverUser"}}, NotLoggedInError, "10004"),
-        (403, {"message": {"error": {"code": "2001", "msg": "연달아"}}}, NaverAPIError, "2001"),
+        (403, {"message": {"error": {"code": "2001", "msg": "연달아"}}}, RateLimitedError, "2001"),
         (500, None, NaverAPIError, None),
     ],
 )

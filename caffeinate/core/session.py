@@ -50,7 +50,7 @@ from . import fingerprint as fp_mod
 from .config import Settings
 from .cookies import CookieStore
 from .curl import AsyncSession, Curl, CurlError, CurlOpt, RequestException, Response
-from .errors import NaverAPIError, NetworkError, NotLoggedInError
+from .errors import NaverAPIError, NetworkError, api_error_class
 from .headers import (
     ACCEPT_ENCODING,
     H2_WEIGHT,
@@ -65,7 +65,6 @@ from .headers import (
 logger = logging.getLogger("caffeinate")
 
 _REDIRECT_CODES = frozenset({301, 302, 303, 307, 308})
-_LOGIN_ERROR_CODES = frozenset({"0004", "10004"})  # gw/like: 0004 로그인하지 않음, editor: 10004 NaverUser 인증 실패
 # 메서드가 GET 으로 바뀌는 리다이렉트에서 브라우저가 지우는 본문 헤더 (Fetch 규격 request-body-header)
 _BODY_HEADERS = frozenset({"content-type", "content-encoding", "content-language", "content-location"})
 
@@ -126,6 +125,10 @@ class CafeSession:
         self.cookies = cookies if cookies is not None else CookieStore.load(self.settings.cookies_file)
         self._loaded_with_login = self._cookies_from_file and self.cookies.has_login
         self._session: AsyncSession | None = None
+        # 요청 간격 (Settings.min_request_interval): 다음 요청을 시작해도 되는 시각(monotonic)
+        self._pace_lock: asyncio.Lock | None = None
+        self._pace_loop: asyncio.AbstractEventLoop | None = None
+        self._next_request_at = 0.0
 
     # ---------------------------------------------------------------- 수명주기
     async def __aenter__(self) -> Self:
@@ -300,6 +303,7 @@ class CafeSession:
         attempts = max(1, self.settings.max_retries)
         last_exc: Exception | None = None
         for attempt in range(attempts):
+            await self._pace()
             try:
                 resp = await session.request(
                     method.value,  # type: ignore[arg-type]
@@ -327,6 +331,24 @@ class CafeSession:
                 await asyncio.sleep(delay)
                 delay *= self.settings.retry_backoff
         raise NetworkError(f"네트워크 오류: {last_exc}") from last_exc
+
+    async def _pace(self) -> None:
+        """Settings.min_request_interval 만큼 요청 시작 시각을 벌린다 (0 이면 아무것도 안 함)
+
+        동시 요청(asyncio.gather)도 lock 으로 줄을 세워 시작 시각이 interval 이상 떨어지게 한다.
+        요청이 끝나기를 기다리지는 않는다 (응답 대기는 겹칠 수 있음).
+        """
+        interval = self.settings.min_request_interval
+        if interval <= 0:
+            return
+        loop = asyncio.get_running_loop()
+        if self._pace_lock is None or self._pace_loop is not loop:  # 이벤트 루프마다 lock 하나
+            self._pace_lock, self._pace_loop = asyncio.Lock(), loop
+        async with self._pace_lock:
+            # 이벤트 루프 타이머는 시계 해상도만큼 일찍 깰 수 있어 (Windows ~15ms) 남은 시간이 없을 때까지 잔다
+            while (wait := self._next_request_at - time.monotonic()) > 0:
+                await asyncio.sleep(wait)
+            self._next_request_at = time.monotonic() + interval
 
     # ---------------------------------------------------------------- 편의 메서드
     async def get(self, url: str, **kw: Any) -> Response:
@@ -372,22 +394,26 @@ def _with_params(url: str, params: dict[str, Any] | None) -> str:
 
 
 def parse_json(resp: Response, url: str) -> Any:
-    """상태코드/에러코드 검사 후 JSON 반환"""
+    """상태코드/에러코드 검사 후 JSON 반환
+
+    HTTP 400 이상이면 (상태, 본문 에러 코드)로 errors.api_error_class 가 고른 NaverAPIError 하위 클래스
+    (NotLoggedInError / ArticleNotFoundError / CafeNotFoundError / PermissionDeniedError / RateLimitedError)를 낸다.
+    """
     try:
         data = resp.json()
     except (ValueError, json.JSONDecodeError):
         data = None
     if resp.status_code >= 400:
-        code, reason = _error_info(data)
+        code, reason = error_info(data)
         msg = f"API 오류 {resp.status_code}: {url}" + (f" ({code} {reason})" if code or reason else "")
-        exc_type = NotLoggedInError if resp.status_code == 401 or code in _LOGIN_ERROR_CODES else NaverAPIError
-        raise exc_type(msg, resp.status_code, resp.text[:500], code)
+        raise api_error_class(resp.status_code, code)(msg, resp.status_code, resp.text[:500], code)
     if data is None:
         raise NaverAPIError(f"JSON 파싱 실패: {url} ({resp.status_code})", resp.status_code, resp.text[:500])
     return data
 
 
-def _error_info(data: Any) -> tuple[str | None, str | None]:
+def error_info(data: Any) -> tuple[str | None, str | None]:
+    """응답 본문 -> (에러 코드, 사유). 스택마다 위치가 다르다 (result / message.error / 최상위 error)"""
     if not isinstance(data, dict):
         return None, None
     res: dict[str, Any] = data["result"] if isinstance(data.get("result"), dict) else data
@@ -400,3 +426,28 @@ def _error_info(data: Any) -> tuple[str | None, str | None]:
         res.get("reason") or err.get("msg") or top_err.get("message") or res.get("message")
     )
     return (str(code) if code else None), (str(reason) if reason else None)
+
+
+def ensure_success(data: Any, what: str, url: str = "") -> None:
+    """HTTP 200 이지만 본문으로 성공 여부를 알리는 쓰기 응답 검사 (실패면 NaverAPIError 하위 클래스)
+
+    [실측 2026-11-13] 성공 응답: 글 삭제 {"message": {"status": "200", ..., "result": {"msg": "Success"}}},
+    댓글 삭제 {"msg": "Success"}.
+    """
+    if isinstance(data, dict):
+        msg = data.get("msg")
+        message: dict[str, Any] = data["message"] if isinstance(data.get("message"), dict) else {}
+        result = message.get("result")
+        if msg is None and isinstance(result, dict):
+            msg = result.get("msg")
+        if isinstance(msg, str) and msg.lower() == "success":
+            return
+        code, reason = error_info(data)
+        if msg is None and str(message.get("status")) == "200" and not code:
+            return
+    else:
+        code, reason = None, None
+    raise api_error_class(None, code)(
+        f"{what} 실패{f' ({code} {reason})' if code or reason else ''}: {url}".rstrip(": "),
+        200, str(data)[:500], code,
+    )

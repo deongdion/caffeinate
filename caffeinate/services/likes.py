@@ -15,7 +15,7 @@ import time
 from typing import Any
 
 from ..core import endpoints
-from ..core.errors import NaverAPIError, ParseError
+from ..core.errors import ParseError, api_error_class
 from ..enums import ReactionType, RequestKind
 from ..models import ArticleRef, LikeMembers, LikeStatus, LikeUser
 from ..utils.parsing import JSON, as_dict, as_list, dig
@@ -118,6 +118,8 @@ def react_params(
 
 
 class LikeService(BaseService):
+    """좋아요 기능 (`cafe.likes`). ref 인자는 게시글 URL 문자열 또는 ArticleRef."""
+
     async def _true_ref(self, ref: ArticleRef) -> ArticleRef:
         """게시글 상세의 cafe.url(참 slug)로 cafe_url 을 채운 ref"""
         article = await self._client.articles.get(ref)
@@ -135,7 +137,9 @@ class LikeService(BaseService):
             referer=endpoints.article_frame_page(r.cafe_id, r.article_id, r.menu_id),
         )
         if resp.status_code >= 400:
-            raise NaverAPIError(f"like 위젯 오류 {resp.status_code}: {url}", resp.status_code, resp.text[:500])
+            raise api_error_class(resp.status_code, None)(
+                f"like 위젯 오류 {resp.status_code}: {url}", resp.status_code, resp.text[:500]
+            )
         return parse_jsonp(resp.text, url)
 
     async def _search(self, r: ArticleRef, cid: str, jq: JsonpState | None = None) -> JSON:
@@ -143,7 +147,9 @@ class LikeService(BaseService):
         return as_dict(await self._jsonp(endpoints.LIKE_ROUTE_SEARCH, search_params(cid, jq or JsonpState()), r))
 
     async def status(self, ref: ArticleRef | str) -> LikeStatus:
-        """좋아요 수 / 내가 눌렀는지 [실측 2026-11-13 Camoufox UI 캡처: 페이지 로드 시 route-like search]
+        """좋아요 수 / 내가 눌렀는지 -> LikeStatus (.like_count, .liked) [실측 2026-11-13 Camoufox UI 캡처]
+
+        페이지 로드 시 브라우저가 보내는 route-like search 와 같은 요청이다.
 
         응답 contents[0].reactions[] 에 count / isReacted 가 온다 (로그인 쿠키 기준, isLogin 값과 무관).
         URL 에서 얻은 slug 로 먼저 조회하고, 반응이 비어 있으면(틀린 slug 이거나 좋아요 0개)
@@ -160,18 +166,35 @@ class LikeService(BaseService):
         content = tried[cid] if cid in tried else _first_content(await self._search(true_ref, cid))
         return LikeStatus.from_api(content, cid)
 
-    async def like(self, ref: ArticleRef | str, reaction: ReactionType = ReactionType.LIKE) -> Any:
-        """좋아요 등록 -> 서버 응답 dict (isReacted, count, ...) [실측 2026-11-13 Camoufox UI 캡처]"""
+    async def like(self, ref: ArticleRef | str, reaction: ReactionType = ReactionType.LIKE) -> LikeStatus:
+        """좋아요 등록 -> 등록 후 LikeStatus (.like_count, .liked) (로그인 필요) [실측 2026-11-13 Camoufox UI 캡처]
+
+        - reaction: 반응 종류 (기본 좋아요). 결과의 reactions 에는 이 반응 하나만 들어 있다.
+
+            st = await cafe.likes.like(ref)
+            print(st.like_count, st.liked)     # 1 True
+        """
         return await self._react(ref, reaction, "POST")
 
-    async def unlike(self, ref: ArticleRef | str, reaction: ReactionType = ReactionType.LIKE) -> Any:
-        """좋아요 취소 -> 서버 응답 dict [실측 2026-11-13 Camoufox UI 캡처]"""
+    async def unlike(self, ref: ArticleRef | str, reaction: ReactionType = ReactionType.LIKE) -> LikeStatus:
+        """좋아요 취소 -> 취소 후 LikeStatus (로그인 필요) [실측 2026-11-13 Camoufox UI 캡처]
+
+            st = await cafe.likes.unlike(ref)  # st.liked == False
+        """
         return await self._react(ref, reaction, "DELETE")
+
+    async def like_raw(self, ref: ArticleRef | str, reaction: ReactionType = ReactionType.LIKE) -> JSON:
+        """like() 와 같지만 서버 JSONP 응답 원본 dict 를 돌려준다 (0.3 의 like() 반환값)"""
+        return (await self._react(ref, reaction, "POST")).raw
+
+    async def unlike_raw(self, ref: ArticleRef | str, reaction: ReactionType = ReactionType.LIKE) -> JSON:
+        """unlike() 와 같지만 서버 JSONP 응답 원본 dict 를 돌려준다 (0.3 의 unlike() 반환값)"""
+        return (await self._react(ref, reaction, "DELETE")).raw
 
     async def members(
         self, ref: ArticleRef | str, *, per_page: int = 10, next_timestamp: int | None = None
     ) -> LikeMembers:
-        """좋아요 누른 멤버 목록
+        """좋아요 누른 멤버 한 페이지 -> LikeMembers (.users, .total_count, .next_timestamp) (로그인 필요)
 
         [실측 2026-11-13 사람 세션 캡처 + Camoufox UI 캡처] 좋아요/취소 클릭 직후 브라우저가
         gw/v5 likeIt/members?perPage=10 을 호출한다 (XHR, X-Cafe-Product).
@@ -191,7 +214,7 @@ class LikeService(BaseService):
         return LikeMembers.from_api(dig(data, "result", default={}))
 
     async def all_members(self, ref: ArticleRef | str, *, per_page: int = 10, max_pages: int = 50) -> list[LikeUser]:
-        """좋아요 누른 멤버 전부 (nextTimestamp 커서 순회, 중복 제거)"""
+        """좋아요 누른 멤버 전부 -> list[LikeUser] (nextTimestamp 커서 순회, 중복 제거, 로그인 필요)"""
         r = await self._client.articles.resolve(ref)
         out: list[LikeUser] = []
         seen: set[str] = set()
@@ -208,7 +231,7 @@ class LikeService(BaseService):
             cursor = page.next_timestamp
         return out
 
-    async def _react(self, ref: ArticleRef | str, reaction: ReactionType, method: str) -> Any:
+    async def _react(self, ref: ArticleRef | str, reaction: ReactionType, method: str) -> LikeStatus:
         """등록/취소. 틀린 slug 로도 토큰이 발급되므로(실측) 항상 게시글 상세의 참 slug 로 cid 를 만든다
 
         브라우저처럼 한 화면의 JSONP 상태(콜백 이름 재사용, `_` 증가)로 search -> 등록/취소 순서로 보낸다.
@@ -221,9 +244,10 @@ class LikeService(BaseService):
             if got is None:
                 continue  # 토큰 발급 실패
             token, issued_at = got
-            return await self._jsonp(
+            data = await self._jsonp(
                 endpoints.like_content(cid), react_params(method, reaction, r.cafe_id, token, issued_at, jq), r
             )
+            return react_status(data, cid, reaction)
         raise ParseError(f"like 위젯 토큰을 발급받지 못했습니다: {r.link}")
 
     async def _guest_token(self, r: ArticleRef, cid: str, jq: JsonpState) -> tuple[str, int] | None:
@@ -238,6 +262,22 @@ class LikeService(BaseService):
         if not token or not isinstance(issued_at, int):
             return None
         return token, issued_at
+
+
+def react_status(data: Any, cid: str, reaction: ReactionType | str = ReactionType.LIKE) -> LikeStatus:
+    """등록/취소 JSONP 응답 -> LikeStatus (반응 1개)
+
+    [실측 2026-11-13] 성공 응답 예: {"contentsId": "31547053_deongdion_197", "reactionType": "like",
+    "count": 1, "isReacted": true, ...}. count / isReacted 가 없으면 실패로 보고 NaverAPIError [추정: 오류 형식 미확인].
+    """
+    d = as_dict(data)
+    if "count" not in d and "isReacted" not in d:
+        code = d.get("code") or d.get("errorCode") or dig(d, "error", "code")
+        code_s = str(code) if code not in (None, "") else None
+        raise api_error_class(None, code_s)(
+            f"좋아요 처리 실패: {cid}" + (f" ({code_s})" if code_s else ""), 200, str(data)[:500], code_s
+        )
+    return LikeStatus.from_reaction(d, cid, reaction)
 
 
 def _first_content(data: Any) -> JSON:

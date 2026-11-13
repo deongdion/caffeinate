@@ -213,7 +213,8 @@ def test_like_flow_jsonp(monkeypatch: pytest.MonkeyPatch, client: Caffeinate) ->
     ])
     ref = ArticleRef(cafe_id=1, article_id=2, menu_id=3)
     resp = asyncio.run(client.likes.unlike(ref))
-    assert resp == {"isReacted": False, "count": 0}
+    assert (resp.like_count, resp.liked, resp.content_id) == (0, False, "1_deongdion_2")
+    assert resp.raw == {"isReacted": False, "count": 0}
     search, react = calls
     frame = endpoints.article_frame_page(1, 2, 3)
     for c in (search, react):

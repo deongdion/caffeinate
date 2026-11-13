@@ -1,12 +1,13 @@
 """
-caffeinate - 네이버 카페 자동화 (curl_cffi AsyncSession 기반)
+caffeinate
 
     import asyncio
     from caffeinate import Caffeinate
 
     async def main():
         async with Caffeinate() as cafe:
-            print(await cafe.cafes.my_cafes())
+            async for a in cafe.boards.iter_articles("remonterace", 2, limit=20):
+                print(a.article_id, a.subject)
 
     asyncio.run(main())
 
@@ -17,6 +18,8 @@ import logging as _logging
 
 from .auth.login import LoginOptions, LoginResult
 from .core import (
+    ArticleNotFoundError,
+    CafeNotFoundError,
     CafeSession,
     CaffeinateError,
     CookieStore,
@@ -25,6 +28,8 @@ from .core import (
     NetworkError,
     NotLoggedInError,
     ParseError,
+    PermissionDeniedError,
+    RateLimitedError,
     Settings,
     endpoints,
 )
@@ -65,17 +70,19 @@ from .models import (
     Writer,
     build_tree,
 )
+from .services.base import CafeLike, ImageLike
 from .utils import html_to_text, parse_cafe_url
 
 # 라이브러리 관례: 기본으로는 아무것도 출력하지 않는다 (enable_logging() 또는 앱의 logging 설정으로 켠다)
 _logging.getLogger("caffeinate").addHandler(_logging.NullHandler())
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
 __all__ = [
     "Article",
     "ArticleAuthority",
     "ArticleListItemType",
+    "ArticleNotFoundError",
     "ArticlePage",
     "ArticleRef",
     "ArticleSummary",
@@ -84,6 +91,8 @@ __all__ = [
     "BrowserBrand",
     "Cafe",
     "CafeGrade",
+    "CafeLike",
+    "CafeNotFoundError",
     "CafeSession",
     "Caffeinate",
     "CaffeinateError",
@@ -93,6 +102,7 @@ __all__ = [
     "CookieStore",
     "Fingerprint",
     "Identifier",
+    "ImageLike",
     "LikeMembers",
     "LikeStatus",
     "LikeUser",
@@ -107,7 +117,9 @@ __all__ = [
     "NotLoggedInError",
     "PageInfo",
     "ParseError",
+    "PermissionDeniedError",
     "Platform",
+    "RateLimitedError",
     "Reaction",
     "ReactionType",
     "RequestKind",

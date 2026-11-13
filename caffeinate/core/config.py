@@ -67,6 +67,9 @@ class Settings:
     max_clients: int = 10            # AsyncSession 동시 연결 수
     proxy: str | None = None
     autosave_cookies: bool = True    # 서버가 갱신한 쿠키를 종료 시 cookies.json 에 반영
+    # 요청 간 최소 간격(초). 세션 하나의 모든 요청(asyncio.gather 동시 요청, 재시도, 리다이렉트 hop 포함)의
+    # 시작 시각을 이 간격 이상 벌린다. 0 이면 끔 (기본). 대량 조회는 0.5~1.0, 대량 쓰기는 1.5 이상 권장.
+    min_request_interval: float = 0.0
 
     # 댓글 2001 ("많은 댓글을 연달아 등록할 수 없어요") 자동 재시도 [실측 2026-11-13]
     comment_retry_max: int = 2                     # 2001 재시도 횟수 (총 시도 = 1 + max)
@@ -79,6 +82,8 @@ class Settings:
             raise ValueError(f"timeout 은 0보다 커야 합니다: {self.timeout}")
         if self.max_retries < 0 or self.max_redirects < 0 or self.comment_retry_max < 0:
             raise ValueError("max_retries / max_redirects / comment_retry_max 는 음수일 수 없습니다")
+        if self.min_request_interval < 0:
+            raise ValueError(f"min_request_interval 은 음수일 수 없습니다: {self.min_request_interval}")
         if self.max_clients < 1:
             raise ValueError(f"max_clients 는 1 이상이어야 합니다: {self.max_clients}")
         self.comment_retry_delays = tuple(self.comment_retry_delays)
