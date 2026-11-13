@@ -129,7 +129,9 @@ async def cmd_myinfo(args: Args, settings: Settings) -> int:
     print(f"닉네임   : {info.nickname}")
     print(f"가입여부 : {'가입' if info.is_member else '미가입'}")
     if info.grade:
-        print(f"카페등급 : {one_line(str(info.grade), 200)}")
+        name, level = info.grade.get("levelName"), info.grade.get("level")
+        text = f"{name} (레벨 {level})" if name else one_line(str(info.grade), 200)
+        print(f"카페등급 : {text}")
     return 0
 
 
@@ -143,10 +145,14 @@ async def cmd_article(args: Args, settings: Settings) -> int:
     print(f"카페    : {art.cafe.name} ({art.cafe.cafe_id}/{art.cafe.url})")
     print(f"게시판  : {art.menu.name} ({art.menu.menu_id})")
     print(f"제목    : {('[' + art.head + '] ') if art.head else ''}{art.subject}")
-    print(f"작성자  : {art.writer.nick} ({art.writer.level_name})")
+    level = f" ({art.writer.level_name})" if art.writer.level_name else ""
+    print(f"작성자  : {art.writer.nick}{level}")
     print(f"작성일  : {local_time(art.written_at)}")
     print(f"조회/댓글: {art.read_count} / {art.comment_count}")
-    print(f"본문    : {one_line(art.content_text, 200)}")
+    label = "요약    " if art.is_snippet else "본문    "
+    print(f"{label}: {one_line(art.content_text, 200)}")
+    if art.is_snippet:
+        print("  (카페 멤버 공개 글 - 비회원이라 본문 대신 요약만 받음)")
     return 0
 
 
@@ -174,7 +180,8 @@ async def cmd_post(args: Args, settings: Settings) -> int:
 # ---------------------------------------------------------------- 댓글/좋아요
 def _print_tree(items: list[Comment]) -> None:
     for c in build_tree(items):
-        print(f"  [{c.comment_id}] {c.writer.nick} ({c.writer.level_name}): {one_line(c.content)}")
+        level = f" ({c.writer.level_name})" if c.writer.level_name else ""
+        print(f"  [{c.comment_id}] {c.writer.nick}{level}: {one_line(c.content)}")
         for r in c.replies:
             print(f"      ㄴ[{r.comment_id}] {r.writer.nick}: {one_line(r.content)}")
 

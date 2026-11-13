@@ -1,4 +1,5 @@
 """게시글 모델"""
+import html
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -152,9 +153,16 @@ class Article:
             cafe_url=self.cafe.url or None,
         )
 
+    @property
+    def is_snippet(self) -> bool:
+        """비회원 공개 범위 밖 글: 본문 대신 요약(summary)만 온 응답"""
+        return "article" not in self.raw and "summary" in self.raw
+
     @classmethod
     def from_api(cls, result: Any) -> Self:
         result = as_dict(result)
+        if "article" not in result and "cafeViewModel" in result:
+            return cls._from_snippet(result)
         a = as_dict(result.get("article"))
         cafe = Cafe.from_api(result.get("cafe"))
         if not cafe.cafe_id:
@@ -171,6 +179,30 @@ class Article:
             comment_count=as_int(a.get("commentCount")),
             content_html=str(a.get("contentHtml") or ""),
             is_notice=bool(a.get("isNotice", False)),
+            authority=ArticleAuthority.from_api(result.get("authority")),
+            raw=result,
+        )
+
+    @classmethod
+    def _from_snippet(cls, result: JSON) -> Self:
+        """[실측 2026-11-13] 비회원 요약 응답 (responseViewType=snippet-non-member)
+
+        cafeViewModel/menuViewModel/subject/summary/writer/writeDate 가 최상위에 온다.
+        """
+        cafe = Cafe.from_api(result.get("cafeViewModel"))
+        cafe.cafe_id = cafe.cafe_id or as_int(result.get("cafeId"))
+        menu = Board.from_api({**as_dict(result.get("menuViewModel")), "menuId": result.get("menuId")})
+        writer = as_dict(result.get("writer"))
+        return cls(
+            cafe=cafe,
+            article_id=as_int(result.get("articleId")),
+            menu=menu,
+            subject=str(result.get("subject") or ""),
+            writer=Writer.from_api(writer, level_src={"memberLevelName": writer.get("memberLevelName")}),
+            written_at=ms_to_datetime(result.get("writeDate")),
+            read_count=as_int(result.get("readCount")),
+            comment_count=as_int(result.get("commentCount")),
+            content_html=html.escape(str(result.get("summary") or "")),
             authority=ArticleAuthority.from_api(result.get("authority")),
             raw=result,
         )
