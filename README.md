@@ -13,7 +13,7 @@ curl_cffi 설치가 필요 없다. 네이티브 확장(패치한 libcurl-imperso
 # Windows x64
 pip install "caffeinate @ https://github.com/deongdion/caffeinate/releases/download/v0.2.0/caffeinate-0.2.0-cp311-abi3-win_amd64.whl"
 # Linux x86_64 (glibc 2.17+)
-pip install "caffeinate @ https://github.com/deongdion/caffeinate/releases/download/v0.2.0/caffeinate-0.2.0-cp311-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl"
+pip install "caffeinate @ https://github.com/deongdion/caffeinate/releases/download/v0.2.0/caffeinate-0.2.0-cp311-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl"
 # macOS arm64 (11.0+)
 pip install "caffeinate @ https://github.com/deongdion/caffeinate/releases/download/v0.2.0/caffeinate-0.2.0-cp311-abi3-macosx_11_0_arm64.whl"
 
