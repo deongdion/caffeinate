@@ -42,7 +42,7 @@ logger = logging.getLogger("caffeinate")
 def available_targets() -> set[str]:
     """설치된 curl_cffi 가 지원하는 impersonate 타겟"""
     try:
-        from curl_cffi.requests.impersonate import BrowserType
+        from .curl import BrowserType
     except ImportError:
         return set()
     return {m.value for m in BrowserType}

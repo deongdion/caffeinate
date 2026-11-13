@@ -10,7 +10,7 @@ curl_cffi AsyncSession 기반 네이버 세션
                  없는 ja4 가 된다. 재개를 끄면 항상 브라우저의 전체 핸드셰이크와 같은 ClientHello.
   2) HTTP/2    : SETTINGS/WINDOW_UPDATE/의사헤더 순서(m,p,a,s) 동일. HEADERS 프레임 PRIORITY weight 는
                  요청 종류별(문서 42, XHR/fetch 22)로 extra_fp 에 지정.
-                 포크 curl_cffi (github.com/deongdion/curl_cffi, caffeinate 브랜치)가 설치돼 있으면
+                 내장 caffeinate._curl_cffi (패치한 libcurl-impersonate, core/curl.py) 가 있으면
                  스트림 ID 와 스트림 WINDOW_UPDATE 도 맞춘다 (firefox_h2_options). [실측 2026-11-13]
                  Camoufox 158 -> 로컬 h2 서버(모든 수신 프레임 기록):
                  - 연결의 첫 요청 스트림은 3, 같은 연결의 다음 요청은 5, 7, ... (스트림 1 은 안 씀)
@@ -32,7 +32,7 @@ curl_cffi AsyncSession 기반 네이버 세션
                  - hop 헤더 순서가 첫 요청과 다름 (headers.py 모듈 설명)
 
   남은 차이:
-  - 공식 curl_cffi 로는 첫 스트림 ID(브라우저 3, curl 1)와 스트림 WINDOW_UPDATE 를 못 맞춘다 (포크 필요, 위 2)
+  - 공식 curl_cffi 로는 첫 스트림 ID(브라우저 3, curl 1)와 스트림 WINDOW_UPDATE 를 못 맞춘다 (내장 확장 필요, 위 2)
   - TLS 세션 재개(PSK)를 안 한다 (위 1 참고)
 """
 import asyncio
@@ -44,14 +44,12 @@ from types import TracebackType
 from typing import Any, Self
 from urllib.parse import quote, urlencode, urljoin, urlsplit
 
-from curl_cffi import AsyncSession, Curl, CurlError, CurlOpt, Response
-from curl_cffi.requests.exceptions import RequestException
-
 from ..enums import HttpMethod, ReferrerPolicy, RequestKind, SecFetchSite
 from ..models.fingerprint import Fingerprint
 from . import fingerprint as fp_mod
 from .config import Settings
 from .cookies import CookieStore
+from .curl import AsyncSession, Curl, CurlError, CurlOpt, RequestException, Response
 from .errors import NaverAPIError, NetworkError, NotLoggedInError
 from .headers import (
     ACCEPT_ENCODING,
@@ -80,11 +78,11 @@ _h2_parity_warned = False
 
 @functools.cache
 def firefox_h2_options() -> dict[CurlOpt, int]:
-    """포크 curl_cffi 의 파이어폭스 h2 옵션 (지원 안 하면 빈 dict)
+    """패치한 libcurl 의 파이어폭스 h2 옵션 (지원 안 하면 빈 dict)
 
-    포크(github.com/deongdion/curl_cffi, caffeinate 브랜치)는 CurlOpt.HTTP2_INITIAL_STREAM_ID(1900),
+    내장 caffeinate._curl_cffi (native/patches/curl-caffeinate.patch) 는 CurlOpt.HTTP2_INITIAL_STREAM_ID(1900),
     CurlOpt.HTTP2_STREAM_WINDOW_UPDATE(1901) 를 추가한다. 상수가 있어도 libcurl 이 패치 안 된 빌드일 수 있으므로
-    (예: 소스 설치가 upstream libcurl-impersonate 를 받아 링크) 실제로 setopt 해 보고 쓴다.
+    (예: 폴백한 공식 curl_cffi) 실제로 setopt 해 보고 쓴다.
     """
     stream_id: CurlOpt | None = getattr(CurlOpt, "HTTP2_INITIAL_STREAM_ID", None)
     window_update: CurlOpt | None = getattr(CurlOpt, "HTTP2_STREAM_WINDOW_UPDATE", None)
@@ -149,8 +147,8 @@ class CafeSession:
             if not h2_options and not _h2_parity_warned:
                 _h2_parity_warned = True
                 logger.warning(
-                    "설치된 curl_cffi 에 파이어폭스 h2 옵션이 없어 첫 스트림 ID(3)와 스트림 WINDOW_UPDATE 를 "
-                    "브라우저와 맞추지 못합니다. README 의 포크 curl_cffi 설치 방법을 참고하세요."
+                    "내장 curl_cffi 확장이 없어 공식 curl_cffi 로 폴백했습니다. 첫 h2 스트림 ID(3)와 스트림 WINDOW_UPDATE 를 "
+                    "브라우저와 맞추지 못합니다. README 의 설치 방법(GitHub Releases 플랫폼 휠)을 참고하세요."
                 )
             self._session = AsyncSession(
                 impersonate=self.fingerprint.impersonate,  # type: ignore[arg-type]
@@ -160,7 +158,7 @@ class CafeSession:
                 proxy=self.settings.proxy,
                 max_clients=self.settings.max_clients,
                 # TLS 세션 재개 끔 - 재개 ClientHello 가 파이어폭스와 달라짐 (모듈 설명 1) [실측 2026-11-13]
-                # + 포크 curl_cffi 면 첫 h2 스트림 ID 3, 요청마다 스트림 WINDOW_UPDATE (모듈 설명 2)
+                # + 내장 확장이면 첫 h2 스트림 ID 3, 요청마다 스트림 WINDOW_UPDATE (모듈 설명 2)
                 curl_options={CurlOpt.SSL_SESSIONID_CACHE: 0, **h2_options},
             )
         return self._session

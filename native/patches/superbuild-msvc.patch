@@ -1,0 +1,39 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index de06d4e..59c3162 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -247,9 +247,12 @@ ExternalProject_Add(brotli
+ # In addition, guard these options with -Wno-unknown-warning-option to
+ # prevent clang from failing on them.
+ set(_boringssl_c_flags "${CMAKE_C_FLAGS}")
+-string(APPEND _boringssl_c_flags " -Wno-unknown-warning-option -Wno-stringop-overflow -Wno-array-bounds -Wno-macro-redefined")
+ set(_boringssl_cxx_flags "${CMAKE_CXX_FLAGS}")
+-string(APPEND _boringssl_cxx_flags " -Wno-macro-redefined")
++# caffeinate: plain MSVC cl.exe rejects GCC/Clang -W flags (D8021).
++if(NOT (MSVC AND NOT CMAKE_C_COMPILER_ID STREQUAL "Clang"))
++  string(APPEND _boringssl_c_flags " -Wno-unknown-warning-option -Wno-stringop-overflow -Wno-array-bounds -Wno-macro-redefined")
++  string(APPEND _boringssl_cxx_flags " -Wno-macro-redefined")
++endif()
+ 
+ set(_boringssl_cmake_args
+   ${_common_cmake_args}
+@@ -271,6 +274,8 @@ ExternalProject_Add(boringssl
+   SOURCE_DIR "${DEPS_SRC_DIR}/boringssl"
+   BINARY_DIR "${DEPS_BUILD_DIR}/boringssl"
+   PATCH_COMMAND ${PATCH_EXE} -p1 -i "${_boringssl_patch_file}"
++    # caffeinate: plain MSVC (cl.exe) build fix
++    COMMAND ${PATCH_EXE} -p1 -i "${CMAKE_SOURCE_DIR}/patches/boringssl-msvc.patch"
+   CMAKE_ARGS ${_boringssl_cmake_args}
+   BUILD_COMMAND ${CMAKE_COMMAND} --build <BINARY_DIR> --config Release --target ssl crypto --parallel ${SUBJOBS}
+   INSTALL_COMMAND ${CMAKE_COMMAND} --build <BINARY_DIR> --config Release --target install --parallel ${SUBJOBS}
+@@ -548,6 +553,10 @@ ExternalProject_Add(curl
+   BINARY_DIR "${DEPS_BUILD_DIR}/curl"
+   INSTALL_DIR "${CMAKE_INSTALL_PREFIX}"
+   PATCH_COMMAND ${PATCH_EXE} -p1 -i "${_curl_patch_file}"
++    # caffeinate: extra Firefox HTTP/2 parity patch on top of curl.patch
++    COMMAND ${PATCH_EXE} -p1 -i "${CMAKE_SOURCE_DIR}/patches/curl-caffeinate.patch"
++    # caffeinate: plain MSVC (cl.exe) build fix
++    COMMAND ${PATCH_EXE} -p1 -i "${CMAKE_SOURCE_DIR}/patches/curl-msvc.patch"
+   DEPENDS ${_curl_deps}
+   CONFIGURE_COMMAND
+     ${CMAKE_COMMAND} -E env

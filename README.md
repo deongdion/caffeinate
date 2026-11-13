@@ -1,35 +1,84 @@
-# caffeinate - 네이버 카페 자동화 (curl_cffi AsyncSession)
+# caffeinate - 네이버 카페 자동화 (curl_cffi AsyncSession 내장)
 
 로그인은 Camoufox(파이어폭스 기반) 브라우저로 하고, 이후 요청은 그 브라우저와 같은
 TLS/HTTP2 지문, 헤더 순서로 보내는 네이버 카페 비동기 파이썬 라이브러리.
 
 ## 설치
 
+Python 3.11+. 파이어폭스 h2 패치를 넣은 curl_cffi 가 **패키지 안에 내장**(`caffeinate._curl_cffi`)되어 있어 별도
+curl_cffi 설치가 필요 없다. 네이티브 확장(패치한 libcurl-impersonate 링크)이 들어 있는 **플랫폼 휠**을
+[GitHub Releases](https://github.com/deongdion/caffeinate/releases) 에서 설치한다 (CPython 3.11 이상 공용 abi3):
+
 ```
-pip install -e .                   # Python 3.11+, 의존성 curl_cffi / camoufox (pyproject.toml)
-pip install -e ".[dev]"            # + pytest / ruff / mypy
+# Windows x64
+pip install "caffeinate @ https://github.com/deongdion/caffeinate/releases/download/v0.2.0/caffeinate-0.2.0-cp311-abi3-win_amd64.whl"
+# Linux x86_64 (glibc 2.17+)
+pip install "caffeinate @ https://github.com/deongdion/caffeinate/releases/download/v0.2.0/caffeinate-0.2.0-cp311-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl"
+# macOS arm64 (11.0+)
+pip install "caffeinate @ https://github.com/deongdion/caffeinate/releases/download/v0.2.0/caffeinate-0.2.0-cp311-abi3-macosx_11_0_arm64.whl"
+
 python -m camoufox fetch           # Camoufox 브라우저 받기 (약 2.5GB, 대부분 글꼴) - 로그인할 때만 필요
+python -c "import caffeinate.core.curl as c; print(c.BUNDLED)"   # True 면 내장 확장 사용 중
 ```
 
-의존성만 직접 설치하려면 `pip install curl_cffi camoufox`.
+(정확한 파일 이름은 Releases 페이지 참고. 다시 설치할 때는 `--force-reinstall`.)
 
-### 포크 curl_cffi (선택, HTTP/2 완전 일치)
+### 폴백 (소스 체크아웃 / 그 밖의 플랫폼)
 
-공식 curl_cffi 로도 동작하지만 h2 의 두 가지(첫 요청 스트림 ID 3, 요청마다 HEADERS 뒤 스트림 WINDOW_UPDATE)는
-브라우저와 다르다 (아래 "브라우저 동일 인식" 표). 이를 맞춘 포크
-[deongdion/curl_cffi `caffeinate` 브랜치](https://github.com/deongdion/curl_cffi/tree/caffeinate)
-(curl_cffi 0.16.3 + libcurl-impersonate v2.2.2 패치)의 휠로 교체하면 `CafeSession` 이 자동으로 켠다.
-패치한 libcurl 이 휠 안에 있어야 하므로 소스(`pip install git+...`) 설치는 안 된다. Windows x64:
+소스에서 설치(`pip install -e .`, sdist, `git+https://...`)하면 네이티브 확장 없이 순수 파이썬으로 설치되고,
+`caffeinate.core.curl` 이 **설치된 공식 curl_cffi 로 폴백**한다. 이때는 `fallback` extra 로 curl_cffi 를 함께 설치한다:
 
 ```
-git clone -b caffeinate https://github.com/deongdion/curl_cffi
-cd curl_cffi
-powershell -ExecutionPolicy Bypass -File scripts\build_windows.ps1 -WorkDir D:\curlbuild -CleanIntermediates
-pip install --force-reinstall --no-deps D:\curlbuild\dist\curl_cffi-0.16.3+caffeinate.1-cp310-abi3-win_amd64.whl
+pip install -e ".[fallback,dev]"   # 개발: + curl_cffi / pytest / ruff / mypy
 ```
 
-(필요: VS 2022+ C++ 빌드 도구, cmake, ninja, Git for Windows. 디스크 약 3 GB, 빌드 실측 약 6 분)
-포크가 아니면 `CafeSession` 이 처음 만들어질 때 `caffeinate` 로거에 경고를 한 번 남기고 그대로 동작한다.
+폴백에서는 h2 의 두 가지(첫 요청 스트림 ID 3, 요청마다 HEADERS 뒤 스트림 WINDOW_UPDATE)를 브라우저와 맞추지 못한다
+(아래 "브라우저 동일 인식" 표). `CafeSession` 이 처음 만들어질 때 `caffeinate` 로거에 경고를 한 번 남기고 그대로 동작한다.
+
+### 직접 빌드 (네이티브 확장 포함 휠)
+
+`native/` 에 패치와 빌드 스크립트가 있다. upstream curl_cffi 0.16.3 ↔ libcurl-impersonate v2.2.2 (curl 8.21.0).
+
+| 파일 | 내용 |
+|---|---|
+| `native/patches/curl-caffeinate.patch` | curl: `CURLOPT_HTTP2_INITIAL_STREAM_ID`(1900), `CURLOPT_HTTP2_STREAM_WINDOW_UPDATE`(1901) |
+| `native/patches/*-msvc.patch` | Windows MSVC 빌드 수정 (superbuild 패치가 위 패치들을 CMake ExternalProject 패치 단계에 연결) |
+| `native/build_windows.ps1` | Windows x64: curl-impersonate 빌드(MSVC+cmake+ninja+NASM) → 휠 → delvewheel 로 DLL 포함 |
+| `native/build_unix.sh` | Linux/macOS: upstream CI 와 같은 방법(Linux 는 zig, glibc 2.17)으로 정적 `libcurl-impersonate.a` 생성 |
+| `native/build_ffi.py` | cffi 확장 `caffeinate._curl_cffi._wrapper` 빌드 (setup.py 가 `CAFFEINATE_LIBCURL_DIR` 있을 때만 사용) |
+| `native/smoke_test.py` | 설치된 휠 검사: 내장 확장 사용, 옵션 1900/1901, tls.peet.ws 에서 HEADERS(3) → WINDOW_UPDATE(3, 12451840) → DATA |
+
+```
+# Windows x64 (필요: VS 2022+ C++ 빌드 도구, cmake, ninja, Git for Windows. 디스크 약 3 GB, 약 6 분)
+powershell -ExecutionPolicy Bypass -File native\build_windows.ps1 -WorkDir D:\cafbuild -CleanIntermediates
+pip install --force-reinstall D:\cafbuild\dist\caffeinate-0.2.0-cp311-abi3-win_amd64.whl
+
+# Linux / macOS (필요 도구는 스크립트 머리말 참고)
+native/build_unix.sh native/out/lib
+CAFFEINATE_LIBCURL_DIR=$PWD/native/out/lib pip wheel . --no-deps -w dist   # Linux 배포용은 cibuildwheel(manylinux) 사용
+```
+
+### 릴리스 (GitHub Actions `.github/workflows/wheels.yml`)
+
+- `native/**`, `setup.py`, `pyproject.toml`, `caffeinate/_curl_cffi/**` 등을 바꿔 push 하면 휠 빌드 + 테스트가 돈다
+  (Windows x64 / Linux x86_64 manylinux2014 / macOS arm64, 각 휠을 Python 3.11·3.13 에 설치해 smoke test + 오프라인 pytest).
+  libcurl-impersonate 빌드 결과는 패치/스크립트 해시로 캐시된다.
+- 새 릴리스: `caffeinate/__init__.py` 의 `__version__` 을 올려 커밋하고 같은 버전의 태그 `v<버전>` 을 push 한다
+  (`git tag v0.2.1 && git push origin v0.2.1`). 태그와 버전이 다르면 실패한다. 성공하면 휠 + sdist 가 붙은 Release 가 만들어진다.
+- 빠진 플랫폼: Linux aarch64 / macOS x86_64 / musl 은 아직 CI 에 없다 (build_unix.sh 는 aarch64 도 처리하므로 행렬만 추가하면 됨).
+  그 밖의 플랫폼은 폴백.
+
+### upstream 을 올릴 때 (curl_cffi / libcurl-impersonate 새 버전)
+
+1. 새 curl_cffi 태그의 `curl_cffi/` 패키지로 `caffeinate/_curl_cffi/` 를 교체하고 다시 적용: `cli/`·`__main__.py` 제외,
+   `requests/session.py` 의 `from curl_cffi.requests import` → `from . import`, `__version__.py` 는 버전 고정,
+   `const.py` 의 `CurlOpt.HTTP2_INITIAL_STREAM_ID = 1900`, `HTTP2_STREAM_WINDOW_UPDATE = 1901`,
+   `requests/impersonate.py`·`utils.py` 의 `extra_fp` 필드 2개 (`git diff` 로 이전 교체 커밋 참고).
+   `ffi/*` 는 `native/ffi/` 로 복사.
+2. 그 curl_cffi 가 쓰는 libcurl-impersonate 태그(curl_cffi `scripts/build.py` 의 `__version__`)로 워크플로/스크립트의
+   `CURL_IMPERSONATE_TAG` 를 바꾸고, `curl-caffeinate.patch` 를 새 curl 소스(curl-impersonate `curl.patch` 적용 후)에 맞춰
+   갱신한다. CURLOPT 번호 1900/1901 이 upstream 과 겹치지 않는지 확인한다. Windows 는 `*-msvc.patch` 도 확인.
+3. `THIRD_PARTY_NOTICES` 의 라이선스 문구 갱신 (curl-impersonate 빌드 결과 `LICENSE*`).
 
 ### 프로필 폴더 (쿠키 = 세션 토큰 저장 위치)
 
@@ -48,7 +97,7 @@ pip install --force-reinstall --no-deps D:\curlbuild\dist\curl_cffi-0.16.3+caffe
 caffeinate/
 ├── __init__.py        공개 API (Caffeinate, 모델, enum, 예외)
 ├── lib.py             Caffeinate 고수준 비동기 클라이언트
-├── core/              config(Settings) · endpoints · errors · session(AsyncSession)
+├── core/              config(Settings) · endpoints · errors · session(AsyncSession) · curl(내장/폴백 선택)
 │                      headers(파이어폭스 헤더 순서) · cookies(CookieStore) · fingerprint(지문)
 ├── enums/             browser · http · cafe (MenuType, BoardType, SortBy ...)
 ├── models/            dataclass: Cafe, Board, Article, ArticleSummary, Comment, LikeStatus,
@@ -56,11 +105,15 @@ caffeinate/
 ├── services/          cafes · boards · articles · comments · likes · members · photos
 ├── auth/              login (Camoufox 로그인 -> 쿠키 + 지문)
 ├── utils/             parsing(URL/JSON) · html · editor(contentJson) · multipart
+├── _curl_cffi/        내장 curl_cffi 0.16.3 (+ h2 패치 옵션). 확장 _wrapper 는 플랫폼 휠에만 있음
 └── profile/           cookies.json / fingerprint.json / camoufox_preset.json / login_firefox/  (공유·커밋 금지)
 login.py               로그인 러너 (python login.py [--manual])
 example.py             비로그인 읽기 예제
 tests/                 오프라인 pytest
 pyproject.toml         패키지/의존성/ruff·mypy·pytest 설정
+setup.py               네이티브 확장 빌드 배선 (CAFFEINATE_LIBCURL_DIR)
+native/                libcurl-impersonate 패치 · 빌드 스크립트 · cffi 소스 · 휠 smoke test
+.github/workflows/     wheels.yml (플랫폼 휠 빌드/테스트/Release)
 ```
 
 ## 로그인
@@ -203,7 +256,7 @@ CaffeinateError                 모든 예외의 부모 (except CaffeinateError 
 ## 개발
 
 ```
-pip install -e ".[dev]"
+pip install -e ".[fallback,dev]"
 pytest                 # 오프라인 단위 테스트 (네트워크 없음, 실제 프로필을 건드리지 않음)
 ruff check .
 mypy caffeinate
@@ -216,13 +269,13 @@ mypy caffeinate
 | 항목 | 방법 | 실측 결과 |
 |---|---|---|
 | TLS | curl_cffi `firefox147` + 로그인 브라우저 ja3 덮어쓰기, TLS 세션 재개 끔 | ja3 / JA4 / peetprint 동일. 재개를 켜면 재접속 ClientHello 에 확장 35 가 더 붙어 파이어폭스에 없는 JA4 가 되므로 끔 |
-| HTTP2 | curl_cffi 파이어폭스 타겟 + 요청별 HEADERS weight (+ 포크 curl_cffi 면 첫 스트림 ID 3, 요청마다 스트림 WINDOW_UPDATE 12451840) | akamai 지문 동일, weight 문서 42 / XHR·fetch 22. 포크 사용 시 tls.peet.ws sent_frames 가 브라우저와 동일 |
+| HTTP2 | curl_cffi 파이어폭스 타겟 + 요청별 HEADERS weight + 내장 패치 libcurl 로 첫 스트림 ID 3, 요청마다 스트림 WINDOW_UPDATE 12451840 | akamai 지문 동일, weight 문서 42 / XHR·fetch 22. 플랫폼 휠이면 tls.peet.ws sent_frames 가 브라우저와 동일 |
 | 헤더 순서/값 | `default_headers=False` + 종류별 순서 구성 | 네이버(Referrer-Policy 명시)·fetch: referer 가 accept-encoding 바로 뒤 → content-type → x-cafe-product → content-length → origin → cookie. 정책 없는 페이지·교차 사이트 강등·리다이렉트 hop 은 referer 가 origin 뒤. 카페 UI 의 댓글 작성/답글/삭제·글쓰기 캡처와 순서 동일. form 본문 공백 `%20`(axios) |
 | priority | XMLHttpRequest 없음, fetch `u=4`, 문서 `u=0, i` | 카페 API 는 XMLHttpRequest(axios) |
 | 쿠키 | curl jar 미사용, CookieStore 가 Set-Cookie 원본을 직접 파싱 | h2 에서 쿠키마다 별도 `cookie:` 헤더 (path 긴 것 먼저, 같으면 생성 순). Expires/Max-Age/HttpOnly 보존 |
 | Referer/Origin | 네이버는 `Referrer-Policy: unsafe-url` 이라 교차 출처(apis, gw)에도 전체 URL (교차 사이트 XHR/fetch 는 출처로 강등). 게시글/댓글 XHR 은 iframe URL(`?fromNext=true`) | 리다이렉트 [실측]: sec-fetch-site 체인 누적, 교차 출처를 거치면 Origin null, 301/302 POST·303 은 GET 으로 바뀌고 content-* 제거 |
 | x-cafe-product | apis.naver.com / article.cafe.naver.com XHR 전부 `pc` | 프론트 캡처와 일치 |
-| 남은 차이 | 공식 curl_cffi 사용 시: 첫 h2 스트림 ID(브라우저 3, 우리 1), 요청 스트림 WINDOW_UPDATE 없음 | 포크 curl_cffi 로 해결 (위 "포크 curl_cffi"). 브라우저는 GET 포함 모든 요청에서 HEADERS 직후 보냄 [실측 2026-11-13 로컬 h2 서버] |
+| 남은 차이 | 폴백(공식 curl_cffi) 시: 첫 h2 스트림 ID(브라우저 3, 우리 1), 요청 스트림 WINDOW_UPDATE 없음 | 플랫폼 휠(내장 확장)로 해결 (위 "설치"). 브라우저는 GET 포함 모든 요청에서 HEADERS 직후 보냄 [실측 2026-11-13 로컬 h2 서버] |
 
 ## 상태 메모
 

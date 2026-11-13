@@ -57,6 +57,9 @@ def test_settings_accepts_str_profile_dir(tmp_path: Path) -> None:
 
 def test_settings_default_without_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("CAFFEINATE_PROFILE_DIR", raising=False)
+    if config._installed_as_package():  # CI: 설치된 휠로 테스트할 때 (프로필 폴더가 없으면 사용자 데이터 폴더)
+        assert Settings().profile_dir in (config.DEFAULT_PROFILE_DIR, config.user_data_dir())
+        return
     # 소스 체크아웃에서는 기존 위치(패키지 안 profile/) 그대로
     assert Settings().profile_dir == config.DEFAULT_PROFILE_DIR
 

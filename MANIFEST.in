@@ -1,0 +1,6 @@
+# sdist: 네이티브 빌드 재료(native/) 포함, 산출물/개인 프로필 제외
+graft native
+prune native/out
+include caffeinate/_curl_cffi/LICENSE caffeinate/_curl_cffi/THIRD_PARTY_NOTICES
+prune caffeinate/profile
+global-exclude *.py[cod] __pycache__ *.pyd *.so *.dll *.a

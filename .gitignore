@@ -4,3 +4,12 @@ __pycache__/
 .ruff_cache/
 caffeinate/profile/
 profile/
+# 패키징/네이티브 빌드 산출물 (native/build_windows.ps1 기본 작업 폴더 build-win/, setuptools build/)
+build/
+build-win/
+dist/
+wheelhouse/
+*.egg-info/
+native/out/
+caffeinate/_curl_cffi/_wrapper.*
+caffeinate/_curl_cffi/*.dll

@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=69"]
+requires = ["setuptools>=70.1", "cffi>=2.0.0"]  # cffi: 내장 _curl_cffi 확장 (setup.py)
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -9,11 +9,9 @@ description = "네이버 카페 비동기 파이썬 클라이언트 (Camoufox �
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-    "curl_cffi>=0.16",      # firefox147 impersonate 타겟 + ja3 덮어쓰기
-    # 파이어폭스 h2 첫 스트림 ID(3)/스트림 WINDOW_UPDATE 까지 맞추려면 포크 휠로 교체 (README "포크 curl_cffi"):
-    #   github.com/deongdion/curl_cffi 브랜치 caffeinate -> scripts/build_windows.ps1 로 만든
-    #   curl_cffi-0.16.3+caffeinate.1-cp310-abi3-win_amd64.whl 을 pip install --force-reinstall --no-deps
-    #   (git+ 소스 설치는 패치 안 된 libcurl 을 받아 링크하므로 효과 없음)
+    # 내장 caffeinate._curl_cffi (curl_cffi 0.16.3 + 파이어폭스 h2 패치) 런타임 의존성
+    "cffi>=2.0.0",
+    "certifi>=2024.2.2",
     "camoufox>=0.5.9",      # 로그인 브라우저 (설치 후 `python -m camoufox fetch` 필요)
 ]
 classifiers = [
@@ -24,6 +22,8 @@ classifiers = [
 ]
 
 [project.optional-dependencies]
+# 네이티브 확장 없이(소스 체크아웃/순수 파이썬 설치) 쓸 때: 공식 curl_cffi 로 폴백 (h2 스트림 ID/WINDOW_UPDATE 패리티 없음)
+fallback = ["curl_cffi>=0.16"]
 dev = ["pytest>=8", "ruff>=0.6", "mypy>=1.10"]
 
 [tool.setuptools.dynamic]
@@ -34,7 +34,7 @@ include = ["caffeinate*"]
 exclude = ["caffeinate.profile*", "tests*"]
 
 [tool.setuptools.package-data]
-caffeinate = ["py.typed"]
+caffeinate = ["py.typed", "_curl_cffi/LICENSE", "_curl_cffi/THIRD_PARTY_NOTICES", "_curl_cffi/py.typed"]
 
 # 세션 토큰/지문/로그인 브라우저 프로필은 절대 배포물에 넣지 않는다
 [tool.setuptools.exclude-package-data]
@@ -42,7 +42,7 @@ caffeinate = ["profile/*", "profile/**/*"]
 
 [tool.ruff]
 line-length = 120
-extend-exclude = ["caffeinate/profile"]
+extend-exclude = ["caffeinate/profile", "caffeinate/_curl_cffi"]  # _curl_cffi: upstream 코드 그대로 둠
 
 [tool.ruff.lint]
 # requires-python>=3.11 로 대상 버전이 올라가며 새로 잡히는 표기 규칙. 기존 코드(timezone.utc) 유지.
@@ -54,6 +54,12 @@ files = ["caffeinate"]
 warn_redundant_casts = true
 check_untyped_defs = true
 
+# 내장 curl_cffi: upstream 코드라 엄격 검사 제외 (타입 정보는 그대로 사용). _wrapper 는 빌드 산출물
+[[tool.mypy.overrides]]
+module = ["caffeinate._curl_cffi", "caffeinate._curl_cffi.*"]
+ignore_errors = true
+ignore_missing_imports = true
+
 [[tool.mypy.overrides]]
 module = ["camoufox", "camoufox.*", "browserforge", "browserforge.*"]
 ignore_missing_imports = true
@@ -63,4 +69,5 @@ testpaths = ["tests"]
 pythonpath = ["."]  # 설치 없이 저장소 루트에서 `pytest` 실행
 addopts = "-ra"
 # Windows Proactor 루프에서 curl_cffi 가 selector 스레드를 붙인다는 안내 (동작 영향 없음)
-filterwarnings = ["ignore:Proactor event loop:RuntimeWarning", "ignore::curl_cffi.aio.CurlCffiWarning"]
+# (CurlCffiWarning 은 RuntimeWarning 하위 클래스, 메시지가 개행으로 시작. 클래스 경로를 쓰면 폴백 환경에서 import 실패)
+filterwarnings = ['ignore:\s*Proactor event loop:RuntimeWarning']

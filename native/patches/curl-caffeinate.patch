@@ -1,0 +1,169 @@
+--- a/include/curl/curl.h
++++ b/include/curl/curl.h
+@@ -2428,6 +2428,16 @@
+   /* curl-impersonate: Comma-separated TLS trust anchor relative OIDs. */
+   CURLOPT(CURLOPT_TLS_TRUST_ANCHORS, CURLOPTTYPE_STRINGPOINT, 1040),
+ 
++  /* caffeinate fork: first client HTTP/2 stream ID of a new connection
++   * (odd, > 1). Firefox (necko) starts at 3. 0 keeps the default (1).
++   * Numbered high to stay clear of future curl-impersonate options. */
++  CURLOPT(CURLOPT_HTTP2_INITIAL_STREAM_ID, CURLOPTTYPE_LONG, 1900),
++
++  /* caffeinate fork: stream-level WINDOW_UPDATE increment sent right after
++   * every request HEADERS frame (before any DATA). Firefox sends
++   * 12451840 (= 12 MiB - 128 KiB initial window). 0 disables. */
++  CURLOPT(CURLOPT_HTTP2_STREAM_WINDOW_UPDATE, CURLOPTTYPE_LONG, 1901),
++
+   CURLOPT_LASTENTRY /* the last unused */
+ } CURLoption;
+ 
+--- a/lib/urldata.h
++++ b/lib/urldata.h
+@@ -1265,6 +1265,8 @@
+   BIT(ws_no_auto_pong);
+ #endif
+   int http2_window_update;
++  int http2_initial_stream_id;     /* caffeinate fork */
++  int http2_stream_window_update;  /* caffeinate fork */
+   int tls_record_size_limit;
+   int tls_key_shares_limit;
+   BIT(http2_no_priority);
+--- a/lib/setopt.c
++++ b/lib/setopt.c
+@@ -1254,6 +1254,26 @@
+ #else
+     return CURLE_NOT_BUILT_IN;
+ #endif
++  case CURLOPT_HTTP2_INITIAL_STREAM_ID:
++    /* caffeinate fork */
++#ifdef USE_HTTP2
++    if(arg < 0 || arg > 0x7fffffff || (arg && !(arg & 1)))
++      return CURLE_BAD_FUNCTION_ARGUMENT;
++    s->http2_initial_stream_id = (int)arg;
++    break;
++#else
++    return CURLE_NOT_BUILT_IN;
++#endif
++  case CURLOPT_HTTP2_STREAM_WINDOW_UPDATE:
++    /* caffeinate fork */
++#ifdef USE_HTTP2
++    if(arg < 0 || arg > 0x7fffffff)
++      return CURLE_BAD_FUNCTION_ARGUMENT;
++    s->http2_stream_window_update = (int)arg;
++    break;
++#else
++    return CURLE_NOT_BUILT_IN;
++#endif
+   case CURLOPT_EXPECT_100_TIMEOUT_MS:
+     result = value_range(&arg, 0, 0, 0xffff);
+     if(!result)
+--- a/lib/easyoptions.c
++++ b/lib/easyoptions.c
+@@ -136,11 +136,15 @@
+   { "HSTS_CTRL", CURLOPT_HSTS_CTRL, CURLOT_LONG, 0 },
+   { "HTTP09_ALLOWED", CURLOPT_HTTP09_ALLOWED, CURLOT_LONG, 0 },
+   { "HTTP200ALIASES", CURLOPT_HTTP200ALIASES, CURLOT_SLIST, 0 },
++  { "HTTP2_INITIAL_STREAM_ID", CURLOPT_HTTP2_INITIAL_STREAM_ID,
++    CURLOT_LONG, 0 },
+   { "HTTP2_NO_PRIORITY", CURLOPT_HTTP2_NO_PRIORITY, CURLOT_LONG, 0 },
+   { "HTTP2_PSEUDO_HEADERS_ORDER", CURLOPT_HTTP2_PSEUDO_HEADERS_ORDER,
+     CURLOT_STRING, 0 },
+   { "HTTP2_SETTINGS", CURLOPT_HTTP2_SETTINGS, CURLOT_STRING, 0 },
+   { "HTTP2_STREAMS", CURLOPT_HTTP2_STREAMS, CURLOT_STRING, 0 },
++  { "HTTP2_STREAM_WINDOW_UPDATE", CURLOPT_HTTP2_STREAM_WINDOW_UPDATE,
++    CURLOT_LONG, 0 },
+   { "HTTP2_WINDOW_UPDATE", CURLOPT_HTTP2_WINDOW_UPDATE, CURLOT_LONG, 0 },
+   { "HTTP3_HTTPHEADER", CURLOPT_HTTP3_HTTPHEADER, CURLOT_SLIST, 0 },
+   { "HTTP3_HTTPHEADER_ORDER", CURLOPT_HTTP3_HTTPHEADER_ORDER,
+@@ -439,6 +443,6 @@
+  */
+ int Curl_easyopts_check(void)
+ {
+-  return (CURLOPT_LASTENTRY % 10000) != (1040 + 1);
++  return (CURLOPT_LASTENTRY % 10000) != (1901 + 1);
+ }
+ #endif
+--- a/lib/http2.c
++++ b/lib/http2.c
+@@ -1299,6 +1299,47 @@
+ }
+ #endif /* CURLVERBOSE */
+ 
++/*
++ * caffeinate fork: Firefox (necko) raises every request stream's receive
++ * window right after sending its HEADERS frame, so the stream-level
++ * WINDOW_UPDATE goes out after HEADERS and before any request DATA.
++ * The stream only exists in nghttp2 once HEADERS has been sent, so this is
++ * done from the on_frame_send callback. The queued WINDOW_UPDATE is a
++ * non-DATA frame and nghttp2 sends those before pending DATA frames.
++ */
++static int cf_h2_on_frame_send(nghttp2_session *session,
++                               const nghttp2_frame *frame, void *userp)
++{
++  if(frame->hd.type == NGHTTP2_HEADERS &&
++     frame->headers.cat == NGHTTP2_HCAT_REQUEST) {
++    struct Curl_easy *data_s =
++      nghttp2_session_get_stream_user_data(session, frame->hd.stream_id);
++    if(data_s && data_s->set.http2_stream_window_update > 0) {
++      int32_t stream_id = frame->hd.stream_id;
++      int32_t wsize =
++        nghttp2_session_get_stream_effective_local_window_size(session,
++                                                               stream_id);
++      int32_t inc = data_s->set.http2_stream_window_update;
++      if(wsize >= 0 && inc <= (int32_t)(0x7fffffff - wsize)) {
++        /* raises nghttp2's stream receive window and queues exactly one
++         * WINDOW_UPDATE(stream_id, inc). curl's own stream->local_window_size
++         * bookkeeping is left alone, so curl only touches the window again
++         * on pause/rate limiting, as before. */
++        int rv = nghttp2_session_set_local_window_size(
++          session, NGHTTP2_FLAG_NONE, stream_id, wsize + inc);
++        if(rv)
++          return NGHTTP2_ERR_CALLBACK_FAILURE;
++      }
++    }
++  }
++#ifdef CURLVERBOSE
++  return on_frame_send(session, frame, userp);
++#else
++  (void)userp;
++  return 0;
++#endif
++}
++
+ static int on_frame_recv(nghttp2_session *session, const nghttp2_frame *frame,
+                          void *userp)
+ {
+@@ -2570,9 +2611,9 @@
+   nghttp2_session_callbacks_set_on_frame_recv_callback(cbs, on_frame_recv);
+   nghttp2_session_callbacks_set_on_invalid_frame_recv_callback(cbs,
+     cf_h2_on_invalid_frame_recv);
+-#ifdef CURLVERBOSE
+-  nghttp2_session_callbacks_set_on_frame_send_callback(cbs, on_frame_send);
+-#endif
++  /* caffeinate fork: always installed (see cf_h2_on_frame_send) */
++  nghttp2_session_callbacks_set_on_frame_send_callback(cbs,
++                                                       cf_h2_on_frame_send);
+   nghttp2_session_callbacks_set_on_data_chunk_recv_callback(
+     cbs, on_data_chunk_recv);
+   nghttp2_session_callbacks_set_on_stream_close_callback(cbs, on_stream_close);
+@@ -2663,6 +2704,20 @@
+     goto out;
+   }
+ 
++  /* caffeinate fork: Firefox (necko) reserves stream 1 and opens its first
++   * request stream as 3. Only for connections we open ourselves (not for
++   * the h1 Upgrade path, where stream 1 is implicit). */
++  if(!ctx->via_h1_upgrade && data->set.http2_initial_stream_id > 1) {
++    rc = nghttp2_session_set_next_stream_id(
++      ctx->h2, data->set.http2_initial_stream_id);
++    if(rc) {
++      failf(data, "nghttp2_session_set_next_stream_id() failed: %s(%d)",
++            nghttp2_strerror(rc), rc);
++      result = CURLE_HTTP2;
++      goto out;
++    }
++  }
++
+   /* curl-impersonate: retain the legacy Firefox stream-priority path. No
+    * current browser profile enables it, so it remains disabled by default.
+    *

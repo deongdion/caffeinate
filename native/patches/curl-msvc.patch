@@ -1,0 +1,11 @@
+--- a/lib/vtls/openssl.c
++++ b/lib/vtls/openssl.c
+@@ -190,7 +190,7 @@
+  * kMaxSignatureAlgorithmNameLen and kSignatureAlgorithmNames
+  * Taken from BoringSSL, see ssl/ssl_privkey.cc
+  * */
+-static const size_t kMaxSignatureAlgorithmNameLen = 23;
++#define kMaxSignatureAlgorithmNameLen ((size_t)23)  /* MSVC: no C VLA */
+ 
+ static const struct {
+   uint16_t signature_algorithm;

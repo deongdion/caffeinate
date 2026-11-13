@@ -1,0 +1,248 @@
+# 플랫폼 휠 빌드 + 스모크 테스트 + (태그 v*) GitHub Release
+#
+# 1) lint     : 소스 체크아웃(네이티브 확장 없음 -> 공식 curl_cffi 폴백)으로 ruff / mypy / pytest
+# 2) build-*  : 패치한 libcurl-impersonate (native/patches) 빌드 -> caffeinate 플랫폼 휠 (cp311-abi3)
+#               windows x64 : native/build_windows.ps1 (MSVC, DLL 을 delvewheel 로 포함)
+#               linux x86_64: native/build_unix.sh (zig, glibc 2.17 정적 아카이브) -> cibuildwheel manylinux2014
+#               macOS arm64 : native/build_unix.sh (네이티브 clang 정적 아카이브) -> cibuildwheel (delocate)
+#               libcurl 빌드 결과는 patches/스크립트 해시로 캐시
+# 3) test     : 휠 설치 -> native/smoke_test.py (내장 확장 사용, 옵션 1900/1901, tls.peet.ws h2 프레임) + pytest
+# 4) release  : 태그 v<버전> 이면 휠 + sdist 를 GitHub Release 에 올린다 (버전 불일치면 실패)
+name: wheels
+
+on:
+  push:
+    tags: ["v*"]
+    branches: ["**"]
+    paths:
+      - "native/**"
+      - "setup.py"
+      - "pyproject.toml"
+      - "MANIFEST.in"
+      - "caffeinate/_curl_cffi/**"
+      - "caffeinate/core/curl.py"
+      - ".github/workflows/wheels.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CURL_IMPERSONATE_TAG: v2.2.2
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -e ".[fallback,dev]"
+      - run: ruff check .
+      - run: mypy caffeinate
+      - run: pytest -q
+
+  sdist:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pipx run build --sdist
+      - name: no private profile / build outputs in sdist
+        run: |
+          tar tzf dist/*.tar.gz | tee files.txt
+          ! grep -E "profile/|\.(pyd|so|dll|a)$|cookies\.json|fingerprint\.json" files.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-sdist
+          path: dist/*.tar.gz
+
+  build-windows:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install ninja
+      - name: cache libcurl-impersonate
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: build-win/curl-impersonate/packages
+          key: libcurl-win-x64-${{ env.CURL_IMPERSONATE_TAG }}-${{ hashFiles('native/patches/**', 'native/build_windows.ps1') }}
+      - name: build
+        shell: pwsh
+        run: |
+          $skip = @{}
+          if ("${{ steps.cache.outputs.cache-hit }}" -eq "true") { $skip = @{ SkipLib = $true } }
+          & native/build_windows.ps1 -WorkDir build-win -CurlImpersonateTag $env:CURL_IMPERSONATE_TAG @skip
+          Remove-Item -Recurse -Force build-win/curl-impersonate/build -ErrorAction SilentlyContinue
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-windows-x64
+          path: build-win/dist/caffeinate-*.whl
+
+  build-unix:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x86_64
+            os: ubuntu-latest
+            cibw_build: cp311-manylinux_x86_64
+          - name: macos-arm64
+            os: macos-14
+            cibw_build: cp311-macosx_arm64
+    runs-on: ${{ matrix.os }}
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "11.0"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: cache libcurl-impersonate
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: native/out/lib
+          key: libcurl-${{ matrix.name }}-${{ env.CURL_IMPERSONATE_TAG }}-${{ hashFiles('native/patches/curl-caffeinate.patch', 'native/build_unix.sh') }}
+      - name: deps (linux)
+        if: runner.os == 'Linux' && steps.cache.outputs.cache-hit != 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config cmake ninja-build curl autoconf automake libtool gperf golang-go
+      - uses: goto-bus-stop/setup-zig@v2
+        if: runner.os == 'Linux' && steps.cache.outputs.cache-hit != 'true'
+        with:
+          version: 0.14.0
+      - name: deps (macos)
+        if: runner.os == 'macOS' && steps.cache.outputs.cache-hit != 'true'
+        run: |
+          brew install pkg-config make cmake ninja autoconf automake libtool gpatch gperf
+          which go || brew install go
+      - name: build libcurl-impersonate
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          if [[ "$RUNNER_OS" == "macOS" ]]; then export MAKE=gmake; fi
+          native/build_unix.sh native/out/lib
+          rm -rf native/out/work
+      - name: build wheel
+        uses: pypa/cibuildwheel@v3.3.1
+        env:
+          CIBW_BUILD: ${{ matrix.cibw_build }}
+          CIBW_ARCHS_MACOS: arm64
+          CIBW_MANYLINUX_X86_64_IMAGE: manylinux2014
+          # linux 는 컨테이너 안에서 빌드 (저장소는 /project 에 마운트)
+          CIBW_ENVIRONMENT_LINUX: CAFFEINATE_LIBCURL_DIR=/project/native/out/lib
+          CIBW_ENVIRONMENT_MACOS: CAFFEINATE_LIBCURL_DIR=${{ github.workspace }}/native/out/lib MACOSX_DEPLOYMENT_TARGET=11.0
+          CIBW_BUILD_VERBOSITY: 1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.name }}
+          path: wheelhouse/*.whl
+
+  test:
+    needs: [build-windows, build-unix]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { artifact: dist-windows-x64, os: windows-2022, python: "3.11" }
+          - { artifact: dist-windows-x64, os: windows-2022, python: "3.13" }
+          - { artifact: dist-linux-x86_64, os: ubuntu-latest, python: "3.11" }
+          - { artifact: dist-linux-x86_64, os: ubuntu-latest, python: "3.13" }
+          - { artifact: dist-macos-arm64, os: macos-14, python: "3.11" }
+          - { artifact: dist-macos-arm64, os: macos-14, python: "3.13" }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ runner.temp }}/wheels
+      - name: install wheel (no curl_cffi)
+        shell: bash
+        run: |
+          python -m pip install "$(ls "$RUNNER_TEMP"/wheels/caffeinate-*.whl)" pytest
+          ! python -m pip show curl_cffi
+      - name: smoke test (outside the source tree)
+        shell: bash
+        run: |
+          cp native/smoke_test.py tests/*.py "$RUNNER_TEMP/"
+          mkdir -p "$RUNNER_TEMP/t" && mv "$RUNNER_TEMP"/test_*.py "$RUNNER_TEMP"/conftest.py "$RUNNER_TEMP/t/"
+          cd "$RUNNER_TEMP"
+          python -I smoke_test.py
+      - name: offline pytest against the installed wheel
+        shell: bash
+        run: |
+          cd "$RUNNER_TEMP/t"
+          python -m pytest -q -p no:cacheprovider --rootdir . .
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [lint, sdist, test]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: dist-*
+          path: dist
+          merge-multiple: true
+      - name: check version
+        run: |
+          ver="$(python3 -c 'import re;print(re.search(r"__version__ = \"([^\"]+)\"", open("caffeinate/__init__.py", encoding="utf-8").read()).group(1))')"
+          test "v$ver" = "$GITHUB_REF_NAME" || { echo "tag $GITHUB_REF_NAME != v$ver"; exit 1; }
+          ls -la dist
+      - name: release notes
+        run: |
+          base="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}"
+          {
+            echo "caffeinate ${GITHUB_REF_NAME} - 파이어폭스 h2 패치 libcurl-impersonate 를 내장한 플랫폼 휠"
+            echo
+            echo "내장 \`caffeinate._curl_cffi\` = curl_cffi 0.16.3 + libcurl-impersonate ${CURL_IMPERSONATE_TAG} (curl 8.21.0)"
+            echo "+ \`CURLOPT_HTTP2_INITIAL_STREAM_ID\`(1900) / \`CURLOPT_HTTP2_STREAM_WINDOW_UPDATE\`(1901) 패치."
+            echo "CPython 3.11 이상 공용 (abi3). 별도 curl_cffi 설치는 필요 없다."
+            echo
+            echo "| 플랫폼 | 파일 |"
+            echo "|---|---|"
+            for f in dist/*.whl; do
+              n="$(basename "$f")"
+              case "$n" in
+                *win_amd64*) p="Windows x64" ;;
+                *manylinux*x86_64*) p="Linux x86_64 (glibc 2.17+)" ;;
+                *macosx*arm64*) p="macOS arm64 (11.0+)" ;;
+                *) p="?" ;;
+              esac
+              echo "| $p | \`$n\` |"
+            done
+            echo
+            echo "## 설치"
+            echo
+            echo '```'
+            for f in dist/*.whl; do
+              n="$(basename "$f")"
+              echo "pip install \"caffeinate @ ${base}/${n}\""
+            done
+            echo '```'
+            echo
+            echo "이미 설치돼 있으면 \`--force-reinstall\` 을 붙인다. 설치 후 \`python -m camoufox fetch\` (로그인 브라우저)."
+            echo "확인: \`python -c \"import caffeinate.core.curl as c; print(c.BUNDLED)\"\` -> \`True\`"
+            echo
+            echo "그 밖의 플랫폼은 sdist(소스) 설치 시 공식 curl_cffi 로 폴백한다 (\`pip install \"caffeinate[fallback] @ ${base}/$(basename dist/*.tar.gz)\"\`, h2 스트림 ID/WINDOW_UPDATE 패리티 없음)."
+          } > notes.md
+          cat notes.md
+      - name: create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/*.whl dist/*.tar.gz --title "caffeinate $GITHUB_REF_NAME" --notes-file notes.md --verify-tag
