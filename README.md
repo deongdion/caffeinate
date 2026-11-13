@@ -96,6 +96,9 @@ async def main():
         comments = await cafe.comments.all(article.ref)               # list[Comment] (평탄)
         tree = build_tree(comments)                                   # replies 채움
         like = await cafe.likes.status(article.ref)                   # LikeStatus
+        best = await cafe.comments.best(article.ref)                  # 베스트 댓글
+        likers = await cafe.likes.members(article.ref)                # 좋아요 누른 멤버 (raw)
+        # await cafe.comments.delete(article.ref, comment_id)          # 댓글 삭제
         # 게시글 URL 은 f-e/cafes/{id}/articles/{id}, {slug}/{articleId}, ArticleRead.nhn?clubid=.. 등 모두 받는다
 
         # 하나의 AsyncSession 으로 동시 요청
@@ -129,6 +132,15 @@ asyncio.run(main())
 
 ## 상태 메모
 
+- 사람 세션 실측 (2026-11-13, Aside 브라우저 로그인 세션에서 카페 작업 수행 + 트래픽 캡처):
+  카페 홈/메인/게시글 로드/목록/댓글 작성/좋아요 등록·취소의 실제 요청이 endpoints.py 구현과
+  엔드포인트·헤더 수준에서 일치함을 확인 (CommentPost.json 현행 재확인).
+  좋아요 content ID 네임스페이스: 사람 브라우저는 {cafeId}_loyaltylife_{articleId},
+  기존 E2E 실측은 {cafeId}_{slug}_{articleId} - likes.content_ids() 로 두 후보 순회.
+  좋아요 등록/취소는 route-like /v1/services/CAFE/contents/{cid}?_method=POST|DELETE (JSONP) 확인.
+  신규: likes.members() (gw/v5 likeIt/members, 스키마 미검증 - raw 반환),
+  comments.best() (gw/v1 best-comments, 스키마 미검증 - result 첫 목록 파싱),
+  comments.delete() (CommentDelete.json, 규약은 Post/Reply 동일 계열 - UI 실측 미검증).
 - 실측 검증 (2026-11-12): 게시판 목록, 게시글 목록, 게시글 읽기, 댓글/대댓글 조회, 좋아요 조회,
   로그인 식별자, slug -> cafeId, 내 카페 목록(homepc, 비어 있으면 레거시 GNB 폴백), 내 정보.
 - 쓰기 실측 검증 (브라우저 캡처 기반, 실제 작성 성공):

@@ -46,6 +46,42 @@ class CommentService(BaseService):
             endpoints.COMMENT_REPLY, r, {"content": text, "stickerId": sticker_id, "refCommentId": comment_id}
         )
 
+    async def best(self, ref: ArticleRef | str) -> list[Comment]:
+        """베스트 댓글
+
+        [실측 2026-11-13 사람 세션 캡처] 게시글 로드 시 브라우저가 gw/v1 best-comments 를 호출한다.
+        응답 스키마는 미검증이라 result 아래 첫 목록을 Comment 로 파싱한다.
+        """
+        r = await self._client.articles.resolve(ref)
+        data = await self.session.get_json(
+            endpoints.best_comments(r.cafe_id, r.article_id),
+            referer=endpoints.article_page(r.cafe_id, r.article_id),
+        )
+        result = dig(data, "result", default={})
+        items: list[Any] = []
+        if isinstance(result, dict):
+            for key in ("bestComments", "bestCommentList", "comments", "items", "list"):
+                v = result.get(key)
+                if isinstance(v, list) and v:
+                    items = v
+                    break
+        return [Comment.from_api(x) for x in items if isinstance(x, dict)]
+
+    async def delete(self, ref: ArticleRef | str, comment_id: int) -> Any:
+        """댓글 삭제
+
+        CommentPost/Reply 와 같은 cafe-mobile form 규약
+        (commentId + cafeId/articleId/requestFrom=A) [2026-11-13].
+        UI 실측은 대상 게시글 삭제로 유실됐고, 첫 호출 시 응답을 꼭 확인하세요.
+        """
+        r = await self._client.articles.resolve(ref)
+        self._require_login()
+        return await self.session.post_form(
+            endpoints.COMMENT_DELETE,
+            data={"commentId": comment_id, "cafeId": r.cafe_id, "articleId": r.article_id, "requestFrom": "A"},
+            referer=endpoints.article_page(r.cafe_id, r.article_id),
+        )
+
     async def _post(self, url: str, r: ArticleRef, fields: dict[str, Any]) -> Any:
         """댓글 등록 POST. 2001("많은 댓글을 연달아 등록할 수 없어요", HTTP 403) 만 재시도한다.
 

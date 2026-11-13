@@ -42,9 +42,10 @@ PHOTO_SESSION_KEY: Final = "https://platform.editor.naver.com/api/cafepc001/v1/p
 UPPHOTO: Final = "https://cafe.upphoto.naver.com"
 PHINF_DOMAIN: Final = "https://cafeptthumb-phinf.pstatic.net"
 
-# ---- 댓글 작성/게시글 삭제 [실측] form-urlencoded ----
+# ---- 댓글 작성/삭제/게시글 삭제 [실측] form-urlencoded ----
 COMMENT_POST: Final = f"{APIS}/cafe-web/cafe-mobile/CommentPost.json"
 COMMENT_REPLY: Final = f"{APIS}/cafe-web/cafe-mobile/CommentReply.json"
+COMMENT_DELETE: Final = f"{APIS}/cafe-web/cafe-mobile/CommentDelete.json"  # [2026-11-13] 규약은 Post/Reply 와 동일 계열, UI 실측은 미검증
 ARTICLE_DELETE: Final = f"{APIS}/cafe-web/cafe-mobile/ArticleDelete.json"
 
 
@@ -86,6 +87,16 @@ def gw_article(cafe: int | str, article_id: int) -> str:
 def gw_comments(cafe: int | str, article_id: int) -> str:
     """result.comments.items[] (대댓글은 평탄화: refId/isRef)"""
     return f"{GW}/v4/cafes/{cafe}/articles/{article_id}/comments"
+
+
+def like_members(cafe_id: int | str, article_id: int, per_page: int = 10) -> str:
+    """좋아요 누른 멤버 목록 [실측 2026-11-13 사람 세션 캡처: 좋아요 클릭 후 브라우저가 호출, gw/v5]"""
+    return f"{GW}/v5/cafes/{cafe_id}/articles/{article_id}/likeIt/members?perPage={per_page}"
+
+
+def best_comments(cafe_id: int | str, article_id: int) -> str:
+    """베스트 댓글 [실측 2026-11-13 사람 세션 캡처: 게시글 로드 시 호출, gw/v1]"""
+    return f"{GW}/v1/cafes/{cafe_id}/articles/{article_id}/best-comments"
 
 
 # ---------------------------------------------------------------- 쓰기 [실측 2026-11-12]
