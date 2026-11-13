@@ -107,8 +107,9 @@ async def main():
         # 쓰기 (로그인 + 카페 멤버)
         img = await cafe.photos.upload_file(cafe_id, 1, "a.png")      # UploadedImage
         ref = await cafe.articles.write(cafe_id, 1, "제목", "본문\n둘째 줄", images=[img])  # ArticleRef
-        await cafe.comments.add(ref, "댓글")                          # -> commentId
-        await cafe.comments.reply(ref, 136299567, "대댓글")
+        cid = await cafe.comments.add(ref, "댓글")                    # -> commentId
+        await cafe.comments.reply(ref, cid, "대댓글")
+        await cafe.comments.delete(ref, cid)                          # -> {"msg": "Success"}
         await cafe.articles.update(ref, 1, "새 제목", "새 본문", images=[img])
         await cafe.likes.like(ref)                                    # unlike(ref) 로 취소
         info = await cafe.members.my_info(cafe_id)                     # 닉네임/등급/활동통계
@@ -138,9 +139,11 @@ asyncio.run(main())
   좋아요 content ID 네임스페이스: 사람 브라우저는 {cafeId}_loyaltylife_{articleId},
   기존 E2E 실측은 {cafeId}_{slug}_{articleId} - likes.content_ids() 로 두 후보 순회.
   좋아요 등록/취소는 route-like /v1/services/CAFE/contents/{cid}?_method=POST|DELETE (JSONP) 확인.
-  신규: likes.members() (gw/v5 likeIt/members, 스키마 미검증 - raw 반환),
-  comments.best() (gw/v1 best-comments, 스키마 미검증 - result 첫 목록 파싱),
-  comments.delete() (CommentDelete.json, 규약은 Post/Reply 동일 계열 - UI 실측 미검증).
+  신규: likes.members() (gw/v5 likeIt/members, 라이브 응답으로 LikeMembers/LikeUser 모델 확정),
+  comments.best() (gw/v1 best-comments, 응답 키 result.comments - 베스트 미선정 시 실제 빈 목록),
+  comments.delete() (CommentDelete.json, [실측 2026-11-13: E2E 성공, 응답 {"msg": "Success"},
+  삭제 댓글은 목록에서 완전 사라짐]). comments.add/reply 는 comment_id 를 반환
+  (응답은 플랫 {"commentId", "refCommentId"} - 실측).
 - 실측 검증 (2026-11-12): 게시판 목록, 게시글 목록, 게시글 읽기, 댓글/대댓글 조회, 좋아요 조회,
   로그인 식별자, slug -> cafeId, 내 카페 목록(homepc, 비어 있으면 레거시 GNB 폴백), 내 정보.
 - 쓰기 실측 검증 (브라우저 캡처 기반, 실제 작성 성공):

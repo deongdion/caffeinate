@@ -1,12 +1,24 @@
-"""댓글/대댓글: 조회, 작성"""
+"""댓글/대댓글: 조회, 작성, 삭제"""
 import asyncio
 from typing import Any
 
 from ..core import endpoints
-from ..core.errors import NaverAPIError
+from ..core.errors import NaverAPIError, ParseError
 from ..models import ArticleRef, Comment, CommentPage
 from ..utils.parsing import dig
 from .base import BaseService, gw_params
+
+
+def comment_id_from(resp: Any) -> int:
+    """CommentPost/Reply 응답 {"commentId": ..., "refCommentId": ...} -> commentId
+
+    [실측 2026-11-13] 응답은 message.result 중첩 없이 플랫이다.
+    """
+    if isinstance(resp, dict):
+        v = resp.get("commentId")
+        if isinstance(v, int):
+            return v
+    raise ParseError(f"댓글 응답에서 commentId 를 찾지 못했습니다: {str(resp)[:200]}")
 
 
 class CommentService(BaseService):
@@ -34,16 +46,40 @@ class CommentService(BaseService):
                 break
         return out
 
-    async def add(self, ref: ArticleRef | str, text: str, *, sticker_id: str = "") -> Any:
-        """댓글 작성 [실측 2026-11-12: E2E 성공] cafe-mobile/CommentPost.json (form)"""
-        r = await self._client.articles.resolve(ref)
-        return await self._post(endpoints.COMMENT_POST, r, {"content": text, "stickerId": sticker_id})
+    async def add(self, ref: ArticleRef | str, text: str, *, sticker_id: str = "") -> int:
+        """댓글 작성 -> comment_id
 
-    async def reply(self, ref: ArticleRef | str, comment_id: int, text: str, *, sticker_id: str = "") -> Any:
-        """대댓글 작성 [실측 2026-11-12: E2E 성공] cafe-mobile/CommentReply.json (refCommentId=부모 댓글)"""
+        [실측 2026-11-13: E2E 성공] cafe-mobile/CommentPost.json (form).
+        응답은 플랫 {"commentId": ..., "refCommentId": ...} 이다.
+        """
         r = await self._client.articles.resolve(ref)
-        return await self._post(
+        resp = await self._post(endpoints.COMMENT_POST, r, {"content": text, "stickerId": sticker_id})
+        return comment_id_from(resp)
+
+    async def reply(self, ref: ArticleRef | str, comment_id: int, text: str, *, sticker_id: str = "") -> int:
+        """대댓글 작성 -> comment_id
+
+        [실측 2026-11-12: E2E 성공] cafe-mobile/CommentReply.json (refCommentId=부모 댓글).
+        """
+        r = await self._client.articles.resolve(ref)
+        resp = await self._post(
             endpoints.COMMENT_REPLY, r, {"content": text, "stickerId": sticker_id, "refCommentId": comment_id}
+        )
+        return comment_id_from(resp)
+
+    async def delete(self, ref: ArticleRef | str, comment_id: int) -> Any:
+        """댓글 삭제 -> 응답 {"msg": "Success"}
+
+        [실측 2026-11-13: E2E 성공] cafe-mobile/CommentDelete.json,
+        폼: commentId + cafeId/articleId/requestFrom=A (Post/Reply 동일 계열).
+        삭제된 댓글은 gw 목록에서 완전히 사라진다 (톰스톤 없음).
+        """
+        r = await self._client.articles.resolve(ref)
+        self._require_login()
+        return await self.session.post_form(
+            endpoints.COMMENT_DELETE,
+            data={"commentId": comment_id, "cafeId": r.cafe_id, "articleId": r.article_id, "requestFrom": "A"},
+            referer=endpoints.article_page(r.cafe_id, r.article_id),
         )
 
     async def best(self, ref: ArticleRef | str) -> list[Comment]:
@@ -66,21 +102,6 @@ class CommentService(BaseService):
                     items = v
                     break
         return [Comment.from_api(x) for x in items if isinstance(x, dict)]
-
-    async def delete(self, ref: ArticleRef | str, comment_id: int) -> Any:
-        """댓글 삭제
-
-        CommentPost/Reply 와 같은 cafe-mobile form 규약
-        (commentId + cafeId/articleId/requestFrom=A) [2026-11-13].
-        UI 실측은 대상 게시글 삭제로 유실됐고, 첫 호출 시 응답을 꼭 확인하세요.
-        """
-        r = await self._client.articles.resolve(ref)
-        self._require_login()
-        return await self.session.post_form(
-            endpoints.COMMENT_DELETE,
-            data={"commentId": comment_id, "cafeId": r.cafe_id, "articleId": r.article_id, "requestFrom": "A"},
-            referer=endpoints.article_page(r.cafe_id, r.article_id),
-        )
 
     async def _post(self, url: str, r: ArticleRef, fields: dict[str, Any]) -> Any:
         """댓글 등록 POST. 2001("많은 댓글을 연달아 등록할 수 없어요", HTTP 403) 만 재시도한다.
