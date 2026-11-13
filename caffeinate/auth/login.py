@@ -18,7 +18,8 @@
   (2차 인증/캡차/기기 등록/보호모드/이용정지 등 - 서버가 별도 템플릿을 렌더링하므로,
    알려진 마커는 분류하고 모르는 화면은 URL/제목/본문을 그대로 보고한다):
 
-    - ncaptcha 챌린지    : headed 면 창에서 풀 때까지 대기(풀면 자동 이어짐), headless 면 오류
+    - ncaptcha 챌린지    : 음성 캡차 OCR 로 최대 5회 자동 해결 [2026-11-13 실측].
+                           실패하면(headed) 창에서 풀 때까지 대기, headless 면 오류
     - 2차 인증(QR/SMS/앱): 안내 후 계속 대기 - 인증을 완료하면 로그인이 자동으로 이어진다
     - 기기 등록/새 기기  : 안내 후 중단 (수동 로그인 한 번이면 영구 프로필에 기억됨)
     - 보호모드/이용정지  : 화면 내용과 함께 즉시 오류
@@ -37,6 +38,7 @@ import asyncio
 import json
 import random
 import re
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -261,6 +263,169 @@ def _classify_state(state: dict[str, Any]) -> str:
     return "other"
 
 
+# ---------------------------------------------------------------- 캡차 자동 해결
+
+# ncaptcha 자동 해결 [2026-11-13 Aside 브라우저 실측]
+# 실측 화면: 로그인 실패 반복 시 "보안을 위해 추가 확인을 해주세요" 이미지 챌린지
+#   (#captcha 입력, #voice=음성전환/#reload 버튼, #log.login=확인 [id 에 dot 있으므로 attribute selector])
+#   -> #voice 클릭 시 음성 모드(<audio src="https://soundcaptcha.nid.naver.com/soundCaptcha.wav?key=...">,
+#      #play_audio=재생, #swap_captcha=이미지 전환, #chptcha 입력)
+#   -> 같은 키로 soundCaptchaEn.wav(영어 디지트) 를 받아 OCR 서버로 정답 획득 가능 (실측 1회 성공, 1.3초)
+#   -> 정답 입력 후 [id='log.login'] 클릭: 통과하면 URL 에 chp 토큰이 붙고 로그인 폼으로 돌아온다
+#      ("다시 로그인해 주세요." - 자동 모드면 자격증명을 다시 제출한다)
+#   주의: JS 로 값 한 번에 넣거나 synthetic click 은 네이버 감시에 걸린다(무반응). trusted 입력 필수.
+_CAPTCHA_OCR_URL = "http://49.254.163.248:5000/digits"
+_CAPTCHA_MAX_ATTEMPTS = 5        # 캡차 해결 재시도 최대 횟수
+_CAPTCHA_OCR_TIMEOUT_MS = 8000   # OCR 서버 1회 대기(ms)
+_SOUND_WAV_URL = "https://soundcaptcha.nid.naver.com/soundCaptchaEn.wav?key={key}&replay={ts}"
+
+_CHALLENGE_VISIBLE_JS = """
+() => {
+  const vis = (el) => !!el && el.getClientRects().length > 0;
+  return {
+    voice: vis(document.getElementById('voice')),
+    play: vis(document.getElementById('play_audio')),
+    input: vis(document.getElementById('chptcha')) || vis(document.getElementById('captcha')),
+    rcaptcha: location.href.indexOf('rcaptcha') !== -1,
+  };
+}
+"""
+
+
+async def _challenge_visible(page: Any) -> bool:
+    """ncaptcha 챌린지 화면이 떠 있는지 (음성/이미지 모두)"""
+    from playwright.async_api import Error as PlaywrightError
+
+    try:
+        st = await page.evaluate(_CHALLENGE_VISIBLE_JS)
+        return bool(st and (st.get("voice") or st.get("play") or st.get("input") or st.get("rcaptcha")))
+    except PlaywrightError:
+        return False
+
+
+async def _captcha_audio_key(page: Any) -> str | None:
+    """음성 모드 <audio src="...key=..."> 에서 캡차 키 추출"""
+    try:
+        src = await page.evaluate("() => { const a = document.querySelector('audio'); return a ? a.src : ''; }")
+        if src and "key=" in str(src):
+            return str(src).split("key=")[1].split("&")[0]
+    except Exception:
+        pass
+    return None
+
+
+async def _solve_captcha_audio_once(page: Any, opt: LoginOptions, on_status: Callable[[str], None]) -> str | None:
+    """음성 캡차 1회 해결: (필요시) 음성 모드 전환 -> 키 -> En.wav -> OCR -> 입력 -> 확인.
+
+    답을 구해 확인까지 눌렀으면 답을 반환, 못 구했으면 None. 통과 여부는 호출 측이 확인한다.
+    """
+    from playwright.async_api import Error as PlaywrightError
+
+    # 이미지 챌린지면 음성 모드로 전환 (음성 모드에선 #play_audio 가 보인다)
+    if await page.locator("#play_audio:visible").count() == 0:
+        voice = page.locator("#voice:visible")
+        if await voice.count() == 0:
+            on_status("[캡차] 음성 모드 버튼(#voice)이 없어 자동 해결 불가 (이미지 전용 챌린지)")
+            return None
+        await voice.click()
+        on_status("[캡차] 음성 모드로 전환")
+
+    # 오디오 키 대기 (src 에 key= 가 붙을 때까지)
+    key = None
+    for _ in range(20):
+        key = await _captcha_audio_key(page)
+        if key:
+            break
+        await asyncio.sleep(0.5)
+    if not key:
+        on_status("[캡차] 오디오 키를 찾지 못했습니다")
+        return None
+
+    on_status("[캡차] 영어 디지트 음원을 받아 OCR 서버로 확인합니다 ...")
+    ctx_req = page.context.request
+    ts = int(time.time() * 1000)
+    wav = None
+    try:
+        resp = await ctx_req.get(
+            _SOUND_WAV_URL.format(key=key, ts=ts),
+            headers={"referer": "https://nid.naver.com/nidlogin.login"},
+            timeout=15000,
+        )
+        if resp.ok:
+            wav = await resp.body()
+    except PlaywrightError as e:
+        on_status(f"[캡차] 음원 다운로드 실패: {type(e).__name__}")
+    if not wav:
+        on_status("[캡차] 음원이 비어 있어 재시도 필요")
+        return None
+
+    answer = None
+    for ocr_try in (1, 2):
+        try:
+            ocr = await ctx_req.post(
+                _CAPTCHA_OCR_URL,
+                multipart={"audio": {"name": "audio.wav", "mimeType": "audio/wav", "buffer": wav}},
+                timeout=_CAPTCHA_OCR_TIMEOUT_MS,
+            )
+            if not ocr.ok:
+                raise LoginError(f"OCR HTTP {ocr.status}")
+            data = json.loads(await ocr.text())
+            digits = re.sub(r"\s+", "", str(data.get("digits") or ""))
+            if digits.isdigit():
+                answer = digits
+                break
+            on_status(f"[캡차] OCR 응답이 숫자가 아님 ({ocr_try}/2): '{digits}'")
+        except Exception as e:
+            on_status(f"[캡차] OCR 실패 ({ocr_try}/2): {type(e).__name__}: {e}")
+        await asyncio.sleep(1.0)
+    if not answer:
+        on_status("[캡차] OCR 서버에서 답을 얻지 못했습니다 - 키 재발급 후 재시도")
+        return None
+
+    on_status(f"[캡차] OCR 답: {answer}")
+    await _type_like_human(page, "#chptcha", answer, opt)
+    await asyncio.sleep(random.uniform(0.3, 0.8))
+    btn = page.locator("[id='log.login']:visible")
+    if await btn.count() == 0:
+        on_status("[캡차] 확인 버튼([id='log.login'])을 찾지 못했습니다")
+        return None
+    await btn.click()
+    return answer
+
+
+async def _solve_ncaptcha(page: Any, opt: LoginOptions, on_status: Callable[[str], None]) -> bool:
+    """ncaptcha 챌린지를 음성 OCR 로 최대 _CAPTCHA_MAX_ATTEMPTS 회 자동 해결.
+
+    True = 챌린지 소멸(통과). False = 5회 실패 또는 자동 해결 불가.
+    """
+    last_key: str | None = None
+    for attempt in range(1, _CAPTCHA_MAX_ATTEMPTS + 1):
+        if not (await _challenge_visible(page)):
+            return True
+        on_status(f"[캡차] 자동 해결 시도 {attempt}/{_CAPTCHA_MAX_ATTEMPTS}")
+        await _solve_captcha_audio_once(page, opt, on_status)
+        # 제출 반영 대기 (네비게이션/화면 전환)
+        for _ in range(6):
+            await asyncio.sleep(0.7)
+            if not (await _challenge_visible(page)):
+                on_status(f"[캡차] 해결 성공 ({attempt}/{_CAPTCHA_MAX_ATTEMPTS}회 만에 통과)")
+                return True
+        # 같은 키가 유지되면 이미지<->음성 전환으로 키를 재발급받는다
+        key_now = await _captcha_audio_key(page)
+        if key_now and key_now == last_key:
+            swap = page.locator("#swap_captcha:visible")
+            if await swap.count():
+                on_status("[캡차] 동일 키 감지 - 이미지 전환 후 음성 재전환으로 키 재발급")
+                await swap.click()
+                await asyncio.sleep(random.uniform(0.6, 1.1))
+        last_key = key_now
+        on_status(f"[캡차] {attempt}/{_CAPTCHA_MAX_ATTEMPTS} 실패")
+        await asyncio.sleep(random.uniform(0.8, 1.6))
+    return not (await _challenge_visible(page))
+
+
+# ---------------------------------------------------------------- 로그인
+
 # ---------------------------------------------------------------- 로그인
 
 async def browser_login(
@@ -369,13 +534,22 @@ async def browser_login(
                         if sig != reported_sig:
                             reported_sig = sig
                             if kind == "challenge":
-                                if opt.headless:
+                                on_status(f"[캡차] 챌린지 감지: {_screen_text(state)}")
+                                solved = await _solve_ncaptcha(page, opt, on_status)
+                                if solved:
+                                    if auto:
+                                        # 통과 후 로그인 폼으로 돌아온다 - 자격증명을 다시 제출
+                                        on_status("[캡차] 통과 - 자격증명을 다시 제출합니다")
+                                        await _auto_fill_and_submit(page, opt, on_status)
+                                    else:
+                                        on_status("[캡차] 통과 - 로그인을 다시 진행해 주세요")
+                                elif opt.headless:
                                     raise LoginError(
-                                        "ncaptcha 챌린지가 떴습니다. headless 로는 풀 수 없습니다."
+                                        "ncaptcha 자동 해결에 실패했습니다. headless 에서는 더 이상 진행할 수 없습니다."
                                         " headless=False 로 다시 실행해 창에서 풀어주세요."
                                     )
-                                on_status(f"[캡차] 챌린지 감지: {_screen_text(state)}")
-                                on_status("       창에서 풀어주세요 - 풀면 자동으로 이어집니다.")
+                                else:
+                                    on_status("       자동 해결 실패 - 창에서 직접 풀어주세요. 풀면 자동으로 이어집니다.")
                             elif kind == "auth":
                                 on_status(f"[2차 인증] 화면 감지: {_screen_text(state)}")
                                 if "알림 발송" in str(state.get("bodyText", "")) or "설정한 기기" in str(state.get("bodyText", "")):
