@@ -71,6 +71,8 @@ def build_content_json(text: str, images: "list[UploadedImage] | None" = None) -
     """본문 텍스트(줄 단위 문단) + 업로드 이미지 -> contentJson 문자열
 
     [실측] di.dio 는 서버 파싱에 필수 (빈 배열이면 500).
+    [실측 2026-11-13] dio 는 이미지 개수와 무관하게 텍스트 1개 + 이미지 1개까지만.
+    이미지마다 항목을 넣으면 이미지 2장부터 500 (IllegalStateException).
     """
     images = images or []
     lines = [ln for ln in text.replace("\r\n", "\n").split("\n") if ln.strip()] if text else []
@@ -81,7 +83,8 @@ def build_content_json(text: str, images: "list[UploadedImage] | None" = None) -
     dio: list[dict[str, Any]] = []
     if text:
         dio.append({"dis": "N", "dia": {"t": 0, "p": 0, "st": len(text.encode("utf-8")), "sk": 1}})
-    dio.extend({"dis": "N", "dia": {"t": 0, "p": 0, "st": 0, "sk": 0}} for _ in images)
+    if images:
+        dio.append({"dis": "N", "dia": {"t": 0, "p": 0, "st": 0, "sk": 0}})
 
     doc = {
         "document": {

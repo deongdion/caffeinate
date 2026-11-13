@@ -97,6 +97,8 @@ asyncio.run(main())
 - 남은 문제:
   - 글 수정(`articles.update`), 연속 댓글(2001 응답은 서버 딜레이, 잠시 후 재시도하면 성공)도 실측 확인.
   - 이미지 첨부: 본문 이미지 404 문제 해결 (contentJson image.path 에 업로드 응답 <url> 을 넣어야 함, 187번 글로 검증).
+  - 이미지 여러 장: contentJson di.dio 는 텍스트 1개 + 이미지 1개까지만 (이미지마다 넣으면 500), 193번 글로 검증.
+  - 게시글 정렬: 서버가 실제로 적용하는 값은 TIME(최신순), LIKE(좋아요순) 두 가지.
   - 좋아요: 4013 문제 해결 (요청 timestamp 에 토큰 발급 응답의 timestamp 를 넣어야 함, 177번 글로 검증).
   - 카페 등급 후보 API(`members.grade`)는 미확정. 멤버이면 `my_info` 가 members 응답의 등급을 쓴다.
 

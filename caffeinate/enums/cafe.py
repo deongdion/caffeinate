@@ -31,12 +31,14 @@ class BoardType(_Lenient):
 
 
 class SortBy(StrEnum):
-    """게시글 목록 정렬 (TIME 만 실측 확인, 나머지는 카페 UI 옵션 기준)"""
+    """게시글 목록 정렬 [실측 2026-11-13]
 
-    TIME = "TIME"
-    RECOMMEND = "RECOMMEND"
-    COMMENT = "COMMENT"
-    VIEW = "VIEW"
+    서버가 받는 값은 TIME / LIKE / COMMENT / READ 이고, 그 외 값은 400.
+    COMMENT, READ 는 받기만 하고 결과는 최신순과 같아서 넣지 않았다.
+    """
+
+    TIME = "TIME"   # 최신순
+    LIKE = "LIKE"   # 좋아요순
 
 
 class ViewType(StrEnum):
