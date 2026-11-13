@@ -12,7 +12,7 @@ from .cafe import Cafe
 from .comment import Comment, CommentPage, build_tree
 from .cookie import Cookie
 from .fingerprint import Fingerprint, firefox_user_agent
-from .like import LikeStatus, Reaction
+from .like import LikeMembers, LikeStatus, LikeUser, Reaction
 from .member import CafeGrade, Identifier, Membership, MyInfo, Writer
 from .photo import UploadedImage
 
@@ -30,7 +30,9 @@ __all__ = [
     "Cookie",
     "Fingerprint",
     "Identifier",
+    "LikeMembers",
     "LikeStatus",
+    "LikeUser",
     "Membership",
     "MyInfo",
     "PageInfo",

@@ -4,7 +4,7 @@ from typing import Any
 from ..core import endpoints
 from ..core.errors import ParseError
 from ..enums import ReactionType
-from ..models import ArticleRef, LikeStatus
+from ..models import ArticleRef, LikeMembers, LikeStatus
 from ..utils.parsing import as_list, dig
 from .base import BaseService
 
@@ -60,18 +60,22 @@ class LikeService(BaseService):
         """좋아요 취소 [실측 2026-11-12 / 2026-11-13 사람 세션 재확인]"""
         return await self._react(ref, reaction, "DELETE")
 
-    async def members(self, ref: ArticleRef | str, *, per_page: int = 10) -> Any:
+    async def members(self, ref: ArticleRef | str, *, per_page: int = 10) -> LikeMembers:
         """좋아요 누른 멤버 목록
 
-        [실측 2026-11-13 사람 세션 캡처] 좋아요 클릭 후 브라우저가 gw/v5 likeIt/members 를 호출한다.
-        응답 스키마는 미검증이라 파싱 없이 result 를 그대로 돌려준다.
+        [실측 2026-11-13 사람 세션 캡처 + 라이브 응답 확인] 좋아요 클릭 후 브라우저가
+        gw/v5 likeIt/members?perPage=10 을 호출한다.
+        result: {totalCount, nextTimestamp, users[{nick, memberKey, likeItTime, isCafeMember,...}],
+                 article{isLikeIt}, cafe{id, name, url(진짜 slug)}}.
+        like 서비스 cid 는 이 cafe.url(slug) 기준이다 - 별칭으로 resolve 했으면 여기서 참 slug 확인 가능.
         """
         self._require_login()
         r = await self._client.articles.resolve(ref)
-        return await self.session.get_json(
+        data = await self.session.get_json(
             endpoints.like_members(r.cafe_id, r.article_id, per_page),
             referer=endpoints.article_page(r.cafe_id, r.article_id),
         )
+        return LikeMembers.from_api(dig(data, "result", default={}))
 
     async def _react(self, ref: ArticleRef | str, reaction: ReactionType, method: str) -> Any:
         self._require_login()  # 비로그인 좋아요는 gw 조회 단계(401 0004)에서 막히므로 미리 막는다
