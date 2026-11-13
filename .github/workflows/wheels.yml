@@ -92,10 +92,12 @@ jobs:
       matrix:
         include:
           - name: linux-x86_64
-            os: ubuntu-latest
+            # ubuntu-24.04 고정: Ubuntu 26 이미지의 시스템 libcrypto.pc (Libs.private: -l:libjitterentropy.a -lzstd) 를
+            # curl 의 FindOpenSSL 이 집어 공유 libcurl 링크가 실패한다
+            os: ubuntu-24.04
             cibw_build: cp311-manylinux_x86_64
           - name: macos-arm64
-            os: macos-14
+            os: macos-15
             cibw_build: cp311-macosx_arm64
     runs-on: ${{ matrix.os }}
     env:
@@ -154,10 +156,10 @@ jobs:
         include:
           - { artifact: dist-windows-x64, os: windows-2022, python: "3.11" }
           - { artifact: dist-windows-x64, os: windows-2022, python: "3.13" }
-          - { artifact: dist-linux-x86_64, os: ubuntu-latest, python: "3.11" }
-          - { artifact: dist-linux-x86_64, os: ubuntu-latest, python: "3.13" }
-          - { artifact: dist-macos-arm64, os: macos-14, python: "3.11" }
-          - { artifact: dist-macos-arm64, os: macos-14, python: "3.13" }
+          - { artifact: dist-linux-x86_64, os: ubuntu-24.04, python: "3.11" }
+          - { artifact: dist-linux-x86_64, os: ubuntu-24.04, python: "3.13" }
+          - { artifact: dist-macos-arm64, os: macos-15, python: "3.11" }
+          - { artifact: dist-macos-arm64, os: macos-15, python: "3.13" }
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
