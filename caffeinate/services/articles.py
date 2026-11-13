@@ -39,8 +39,9 @@ class ArticleService(BaseService):
         """gw v4 상세 원본 result (글 + 첫 댓글 페이지 + 내 권한 + 카페 정보)"""
         data = await self.session.get_json(
             endpoints.gw_article(cafe_id, article_id),
-            params=gw_params(cafe_id),
-            referer=endpoints.article_page(cafe_id, article_id),
+            params=gw_params(cafe_id, requestFrom="A"),
+            headers=dict(endpoints.PRODUCT_HEADERS),  # [실측 2026-11-13] 프론트는 apis/gw XHR 전부에 붙인다
+            referer=endpoints.article_frame_page(cafe_id, article_id),  # [실측 2026-11-13] iframe URL
         )
         return dig(data, "result", default={})
 
@@ -104,7 +105,9 @@ class ArticleService(BaseService):
         return await self.session.post_form(
             endpoints.ARTICLE_DELETE,
             data={"cafeId": r.cafe_id, "articleId": r.article_id, "requestFrom": "A"},
-            referer=endpoints.article_page(r.cafe_id, r.article_id),
+            # [추정] 댓글 계열(cafe-mobile *.json)과 같은 헤더/Referer - ArticleDelete 는 UI 캡처하지 않음
+            headers=dict(endpoints.PRODUCT_HEADERS),
+            referer=endpoints.article_frame_page(r.cafe_id, r.article_id),
         )
 
 
@@ -113,7 +116,7 @@ def _article_payload(
 ) -> dict[str, Any]:
     """등록/수정 페이로드 (2026-11-12 브라우저 캡처값). 생성은 headId 없음, 수정은 headId 포함"""
     article: dict[str, Any] = {
-        "cafeId": cafe_id,
+        "cafeId": str(cafe_id),  # [실측 2026-11-13 UI 캡처] 프론트는 문자열
         "contentJson": content_json,
         "from": "pc",
         "menuId": menu_id,

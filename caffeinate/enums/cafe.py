@@ -18,7 +18,19 @@ class MenuType(_Lenient):
     SEPARATOR = "S"   # 구분선 (name 없음)
     MEMO = "M"        # 가입인사 등 메모 게시판
     ATTENDANCE = "A"  # 출석체크
+    FOLDER = "F"      # [실측 2026-11-13] 폴더(하위 메뉴 묶음) - 글 목록 없음 (목록 API 가 빈 결과)
+    LINK = "L"        # [실측 2026-11-13] 값 존재 확인. 의미(링크 메뉴)는 [추정]
     UNKNOWN = "?"     # 실측에 없던 값
+
+    @property
+    def is_board(self) -> bool:
+        """글 목록을 가진 일반 게시판인지 (폴더/구분선/링크/모르는 값 제외)"""
+        return self is MenuType.BOARD
+
+    @property
+    def is_container(self) -> bool:
+        """글이 없는 구조용 메뉴(폴더/구분선)인지"""
+        return self in (MenuType.FOLDER, MenuType.SEPARATOR)
 
 
 class BoardType(_Lenient):
@@ -27,6 +39,7 @@ class BoardType(_Lenient):
     LIST = "L"
     IMAGE = "I"
     MEMO = "M"
+    T = "T"           # [실측 2026-11-13] 값 존재 확인, 표시 형태 의미는 미확인
     UNKNOWN = "?"
 
 
@@ -60,4 +73,15 @@ class ArticleListItemType(_Lenient):
 
     ARTICLE = "ARTICLE"
     AD = "AD"
+    REQUIRED_NOTICE = "REQUIRED_NOTICE"    # [실측 2026-11-13] 필독 공지
+    CAFE_MAIN_NOTICE = "CAFE_MAIN_NOTICE"  # [실측 2026-11-13] 카페 전체 공지
+    MENU_NOTICE = "MENU_NOTICE"            # [실측 2026-11-13] 게시판 공지
     UNKNOWN = "?"
+
+    @property
+    def is_notice(self) -> bool:
+        return self in (
+            ArticleListItemType.REQUIRED_NOTICE,
+            ArticleListItemType.CAFE_MAIN_NOTICE,
+            ArticleListItemType.MENU_NOTICE,
+        )

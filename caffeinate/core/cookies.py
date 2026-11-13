@@ -3,9 +3,14 @@
 
 curl 내부 쿠키 jar 를 쓰면 Cookie 헤더가 헤더 맨 앞에 붙고, 직접 넣은 Cookie 헤더와
 중복 전송된다 (실측). 그래서 쿠키는 여기서 직접 관리하고 요청마다 Cookie 헤더를
-파이어폭스 위치(origin 다음, sec-fetch-* 앞)에 넣는다. 응답의 Set-Cookie 는 update_from_jar 로 반영.
+파이어폭스 위치(referer/origin 다음, sec-fetch-* 앞)에 넣는다. 응답의 Set-Cookie 는
+update_from_headers 로 원본 헤더를 직접 파싱해 반영한다 (Expires/Max-Age/Path 기본값 보존).
+
+[실측 2026-11-13] 파이어폭스 Cookie 순서: path 긴 것 먼저, 같으면 생성 순. 기존 쿠키를 다시 설정해도
+처음 생성 위치를 유지한다 -> dict 삽입 순서 + 교체 시 위치 유지로 같은 순서를 만든다.
 """
 import json
+import os
 from collections.abc import Iterable, Iterator
 from http.cookiejar import Cookie as JarCookie
 from pathlib import Path
@@ -36,8 +41,10 @@ class CookieStore:
         old = self._items.get(cookie.key)
         if old is not None and old.value == cookie.value and old.expires == cookie.expires:
             return
-        if cookie.is_expired or cookie.value == "":
-            self._items.pop(cookie.key, None)  # 서버가 삭제 지시
+        if cookie.is_expired:
+            # 서버가 삭제 지시 (과거 Expires / Max-Age<=0). 빈 값 쿠키는 브라우저처럼 그대로 보관·전송한다.
+            if self._items.pop(cookie.key, None) is None:
+                return
         else:
             self._items[cookie.key] = cookie
         self.dirty = True
@@ -60,8 +67,18 @@ class CookieStore:
         matched.sort(key=lambda c: len(c.path), reverse=True)
         return "; ".join(f"{c.name}={c.value}" for c in matched)
 
+    def update_from_headers(self, set_cookies: Iterable[str], request_url: str) -> None:
+        """응답의 Set-Cookie 헤더들 반영 (브라우저가 거부할 쿠키는 무시)"""
+        for line in set_cookies:
+            c = Cookie.from_set_cookie(line, request_url)
+            if c is not None:
+                self.set(c)
+
     def update_from_jar(self, jar: Iterable[JarCookie], request_url: str) -> None:
-        """curl_cffi Response.cookies.jar (http.cookiejar.Cookie) 반영"""
+        """curl_cffi Response.cookies.jar (http.cookiejar.Cookie) 반영
+
+        주의: curl_cffi 0.16 의 Response.cookies 는 Expires/Max-Age 를 잃는다 -> update_from_headers 권장.
+        """
         host = urlparse(request_url).hostname or ""
         for jc in jar:
             self.set(Cookie.from_jar(jc, request_host=host))
@@ -87,6 +104,14 @@ class CookieStore:
             return cls()
 
     def save(self, path: Path) -> None:
+        """cookies.json 저장 (세션 토큰이므로 POSIX 에서는 0600 권한)"""
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(self.to_list(), ensure_ascii=False, indent=2), encoding="utf-8")
+        data = json.dumps(self.to_list(), ensure_ascii=False, indent=2)
+        if os.name == "posix":
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(data)
+            os.chmod(path, 0o600)  # 기존 파일 권한도 좁힌다
+        else:
+            path.write_text(data, encoding="utf-8")
         self.dirty = False

@@ -28,6 +28,8 @@ _BOARDLIST: Final = f"{APIS}/cafe-web/cafe-boardlist-api/v1/cafes"
 
 # ---- like 서비스 ----
 # [실측] 조회: /v1/search/contents?q=CAFE[{cafeId}_{cafeUrl}_{articleId}]  (/v1/search 는 500)
+# [실측 2026-11-13] cafeUrl 은 카페의 참 slug (gw 게시글 응답 cafe.url) 여야 한다. 틀린 slug 를 넣어도
+#   빈 결과가 아니라 reactions=[] 인 콘텐츠가 오고 guestToken 도 발급된다 (그 cid 로 등록하면 엉뚱한 콘텐츠에 반영).
 LIKE_SEARCH: Final = f"{LIKE}/v1/search/contents"
 # [실측] 등록/취소 브라우저 요청: GET route-like /v1/services/CAFE/contents/{cid}?_method=POST|DELETE
 #   guestToken 과 timestamp 는 route-like /v1/search/contents 응답 값을 그대로 쓴다 (timestamp 가 다르면 4013)
@@ -84,9 +86,15 @@ def gw_article(cafe: int | str, article_id: int) -> str:
     return f"{GW}/v4/cafes/{cafe}/articles/{article_id}"
 
 
-def gw_comments(cafe: int | str, article_id: int) -> str:
-    """result.comments.items[] (대댓글은 평탄화: refId/isRef)"""
-    return f"{GW}/v4/cafes/{cafe}/articles/{article_id}/comments"
+def gw_comments(cafe: int | str, article_id: int, page: int | None = None) -> str:
+    """result.comments.items[] (대댓글은 평탄화: refId/isRef)
+
+    [실측 2026-11-13] 페이지는 경로 `/comments/pages/{page}` 로 지정한다 (쿼리 ?page= 는 무시되고
+    항상 첫 페이지가 온다). 페이지 크기는 쿼리 size (기본 100, size=50 적용 확인).
+    마지막 페이지를 넘는 번호는 마지막 페이지를 그대로 돌려준다 (hasNext=false).
+    """
+    base = f"{GW}/v4/cafes/{cafe}/articles/{article_id}/comments"
+    return f"{base}/pages/{page}" if page is not None else base
 
 
 def like_members(cafe_id: int | str, article_id: int, per_page: int = 10) -> str:
@@ -133,6 +141,14 @@ def cafe_page(cafe_id: int, menu_id: int | None = None) -> str:
 def article_page(cafe_id: int, article_id: int, menu_id: int | None = None) -> str:
     url = f"https://cafe.naver.com/f-e/cafes/{cafe_id}/articles/{article_id}"
     return f"{url}?menuid={menu_id}" if menu_id else url
+
+
+def article_frame_page(cafe_id: int, article_id: int) -> str:
+    """게시글 iframe 화면 URL - 게시글/댓글 XHR(gw 조회, best-comments, CommentPost/Reply/Delete)의 Referer
+
+    [실측 2026-11-13 UI 캡처] 프론트는 f-e 바깥 화면이 아니라 iframe URL(?fromNext=true)을 Referer 로 보낸다.
+    """
+    return f"https://cafe.naver.com/ca-fe/cafes/{cafe_id}/articles/{article_id}?fromNext=true"
 
 
 def write_page(cafe_id: int, menu_id: int) -> str:

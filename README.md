@@ -6,9 +6,41 @@ TLS/HTTP2 지문, 헤더 순서로 보내는 네이버 카페 비동기 파이�
 ## 설치
 
 ```
-pip install curl_cffi camoufox     # Python 3.11+
-python -m camoufox fetch           # Camoufox 브라우저 받기 (약 2.5GB, 대부분 글꼴)
+pip install -e .                   # Python 3.11+, 의존성 curl_cffi / camoufox (pyproject.toml)
+pip install -e ".[dev]"            # + pytest / ruff / mypy
+python -m camoufox fetch           # Camoufox 브라우저 받기 (약 2.5GB, 대부분 글꼴) - 로그인할 때만 필요
 ```
+
+의존성만 직접 설치하려면 `pip install curl_cffi camoufox`.
+
+### 포크 curl_cffi (선택, HTTP/2 완전 일치)
+
+공식 curl_cffi 로도 동작하지만 h2 의 두 가지(첫 요청 스트림 ID 3, 요청마다 HEADERS 뒤 스트림 WINDOW_UPDATE)는
+브라우저와 다르다 (아래 "브라우저 동일 인식" 표). 이를 맞춘 포크
+[deongdion/curl_cffi `caffeinate` 브랜치](https://github.com/deongdion/curl_cffi/tree/caffeinate)
+(curl_cffi 0.16.3 + libcurl-impersonate v2.2.2 패치)의 휠로 교체하면 `CafeSession` 이 자동으로 켠다.
+패치한 libcurl 이 휠 안에 있어야 하므로 소스(`pip install git+...`) 설치는 안 된다. Windows x64:
+
+```
+git clone -b caffeinate https://github.com/deongdion/curl_cffi
+cd curl_cffi
+powershell -ExecutionPolicy Bypass -File scripts\build_windows.ps1 -WorkDir D:\curlbuild -CleanIntermediates
+pip install --force-reinstall --no-deps D:\curlbuild\dist\curl_cffi-0.16.3+caffeinate.1-cp310-abi3-win_amd64.whl
+```
+
+(필요: VS 2022+ C++ 빌드 도구, cmake, ninja, Git for Windows. 디스크 약 3 GB, 빌드 실측 약 6 분)
+포크가 아니면 `CafeSession` 이 처음 만들어질 때 `caffeinate` 로거에 경고를 한 번 남기고 그대로 동작한다.
+
+### 프로필 폴더 (쿠키 = 세션 토큰 저장 위치)
+
+쿠키/지문/로그인 브라우저 프로필은 `Settings.profile_dir` 에 저장된다. 기본 위치 결정 순서:
+
+1. `Settings(profile_dir=...)` 직접 지정 (문자열도 됨)
+2. 환경변수 `CAFFEINATE_PROFILE_DIR`
+3. 소스 체크아웃(`pip install -e .` 포함)이거나 패키지 안 `caffeinate/profile/` 이 이미 있으면 그 폴더 (기존 동작)
+4. site-packages 에 일반 설치된 경우 사용자 데이터 폴더
+   (Windows `%LOCALAPPDATA%\caffeinate`, macOS `~/Library/Application Support/caffeinate`,
+   Linux `~/.local/share/caffeinate`) - 재설치 때 지워지거나 쓰기 권한이 없는 site-packages 를 피한다
 
 ## 구조
 
@@ -25,6 +57,10 @@ caffeinate/
 ├── auth/              login (Camoufox 로그인 -> 쿠키 + 지문)
 ├── utils/             parsing(URL/JSON) · html · editor(contentJson) · multipart
 └── profile/           cookies.json / fingerprint.json / camoufox_preset.json / login_firefox/  (공유·커밋 금지)
+login.py               로그인 러너 (python login.py [--manual])
+example.py             비로그인 읽기 예제
+tests/                 오프라인 pytest
+pyproject.toml         패키지/의존성/ruff·mypy·pytest 설정
 ```
 
 ## 로그인
@@ -43,11 +79,13 @@ async def main():
 asyncio.run(main())
 ```
 
-루트 러너로도 실행할 수 있다 (자격증명은 NAVER_ID / NAVER_PASSWORD 환경변수, 없으면 프롬프트):
+루트 러너로도 실행할 수 있다 (소스 체크아웃 기준. 자격증명은 NAVER_ID / NAVER_PASSWORD 환경변수, 없으면 프롬프트):
 
 ```
-python login.py            # 자동 입력 모드
-python login.py --manual   # 수동 모드 (창만 띄우고 직접 로그인)
+python login.py                         # 자동 입력 모드
+python login.py --manual                # 수동 모드 (창만 띄우고 직접 로그인)
+python login.py --debug                 # 폴링마다 화면 상태 덤프 (미지 화면 실측용)
+python login.py --profile-dir D:/naver  # 저장 위치 지정 (기본은 위 "프로필 폴더" 규칙)
 ```
 
 자동 입력 구현 노트 [2026-11 login.js 분석 기반]:
@@ -73,7 +111,9 @@ async with await Caffeinate.login() as cafe:   # 창만 띄우고 사람이 로�
     print(await cafe.is_logged_in())
 ```
 
-이후에는 `Caffeinate()` 가 저장된 쿠키와 지문을 읽는다. 쿠키가 만료되면 `Caffeinate.login()` 을 다시 호출한다.
+이후에는 `Caffeinate()` 가 저장된 쿠키와 지문을 읽는다. 쿠키가 만료되면 로그인이 필요한 API 가
+`NotLoggedInError` 를 내고(메시지에 재로그인 안내 포함), `python login.py` 또는 `Caffeinate.login()` 으로 다시 로그인하면 된다.
+`cafe.has_login_cookies` 는 로컬 쿠키 유무만, `await cafe.is_logged_in()` 은 서버에 물어 실제 로그인 상태를 본다.
 
 - 로그인 브라우저: Camoufox 영구 프로필(`profile/login_firefox`) + PC별 고정 기기 프리셋(`profile/camoufox_preset.json`).
 - 지문: 로그인 때 브라우저가 실제로 보낸 UA / Accept-Language 와 그 버전의 TLS(ja3)를 `fingerprint.json` 에 저장한다.
@@ -96,8 +136,8 @@ async def main():
         comments = await cafe.comments.all(article.ref)               # list[Comment] (평탄)
         tree = build_tree(comments)                                   # replies 채움
         like = await cafe.likes.status(article.ref)                   # LikeStatus
-        best = await cafe.comments.best(article.ref)                  # 베스트 댓글
-        likers = await cafe.likes.members(article.ref)                # 좋아요 누른 멤버 (raw)
+        best = await cafe.comments.best(article.ref)                  # list[Comment] 베스트 댓글 (미선정이면 [])
+        likers = await cafe.likes.members(article.ref)                # LikeMembers (로그인 필요, .users / .total_count)
         # await cafe.comments.delete(article.ref, comment_id)          # 댓글 삭제
         # 게시글 URL 은 f-e/cafes/{id}/articles/{id}, {slug}/{articleId}, ArticleRead.nhn?clubid=.. 등 모두 받는다
 
@@ -110,34 +150,89 @@ async def main():
         cid = await cafe.comments.add(ref, "댓글")                    # -> commentId
         await cafe.comments.reply(ref, cid, "대댓글")
         await cafe.comments.delete(ref, cid)                          # -> {"msg": "Success"}
-        await cafe.articles.update(ref, 1, "새 제목", "새 본문", images=[img])
+        await cafe.articles.update(ref, 1, "새 제목", "새 본문", images=[img])  # 응답 원본 (dict)
         await cafe.likes.like(ref)                                    # unlike(ref) 로 취소
-        info = await cafe.members.my_info(cafe_id)                     # 닉네임/등급/활동통계
+        info = await cafe.members.my_info(cafe_id)                     # MyInfo 닉네임/등급/활동통계 (로그인 필요)
 
 asyncio.run(main())
 ```
 
-설정은 `Settings(timeout=..., max_retries=..., proxy=..., profile_dir=...)` 로 바꿔 `Caffeinate(settings)` 에 넘긴다.
-전체 예제: `python example.py`
+설정은 `Settings(timeout=..., max_retries=..., proxy=..., profile_dir=...)` (키워드 전용) 로 바꿔 `Caffeinate(settings)` 에 넘긴다.
+전체 예제: `python example.py` (`--debug` 로 디버그 로그)
+
+### 동기 코드에서
+
+```python
+import caffeinate
+
+boards = caffeinate.run(lambda cafe: cafe.boards.all(18886295))   # 열고 -> 실행 -> 닫기
+
+async def job(cafe: caffeinate.Caffeinate) -> list[str]:
+    return [a.subject for a in await cafe.boards.articles(18886295, 2)]
+subjects = caffeinate.run(job)
+```
+
+Jupyter 처럼 이미 이벤트 루프가 도는 곳에서는 `run()` 대신 `async with Caffeinate() as cafe:` 로 직접 await 한다.
+
+### 예외
+
+```
+CaffeinateError                 모든 예외의 부모 (except CaffeinateError 로 한 번에)
+├── NaverAPIError               서버 응답 오류: e.status (HTTP), e.code (본문 에러코드, 예 "2001"), e.body
+│   └── NotLoggedInError        비로그인/쿠키 만료 (0004, 10004, 401) -> 다시 로그인
+├── NetworkError                재시도 후에도 연결/타임아웃 실패
+├── ParseError (ValueError)     URL/식별자/응답 해석 실패
+└── LoginError                  브라우저 로그인 실패 (자격증명 오류, 보호조치, 시간 초과 등)
+```
+
+`str(e)` 에는 해결 방법(`e.hint`)이 함께 붙는다.
+
+### 로깅
+
+라이브러리는 `logging.getLogger("caffeinate")` 를 쓰고 기본으로는 아무것도 출력하지 않는다(NullHandler).
+`caffeinate.enable_logging()` (기본 DEBUG) 또는 앱의 `logging.basicConfig(level=logging.DEBUG)` 로 켠다.
+쿠키 값/비밀번호는 로그에 남기지 않는다.
+
+### 공개 API
+
+`from caffeinate import ...` 로 `Caffeinate`, `Settings`, `LoginOptions`, 모든 모델(`Article`, `ArticleRef`,
+`ArticlePage`, `Comment`, `LikeStatus`, `LikeMembers`, `MyInfo` ...), enum(`SortBy`, `ViewType`, `ReactionType` ...),
+예외, 헬퍼(`build_tree`, `parse_cafe_url`, `html_to_text`, `run`, `enable_logging`)를 바로 가져올 수 있다.
+타입 힌트가 포함된 패키지다 (`py.typed`).
+
+## 개발
+
+```
+pip install -e ".[dev]"
+pytest                 # 오프라인 단위 테스트 (네트워크 없음, 실제 프로필을 건드리지 않음)
+ruff check .
+mypy caffeinate
+```
+
+실서버 동작은 `python example.py` (비로그인 읽기)로 확인한다. 쓰기 기능은 실제 계정에 반영되므로 주의.
 
 ## 브라우저 동일 인식 (2026-11-13 실측, Camoufox = Firefox 158)
 
 | 항목 | 방법 | 실측 결과 |
 |---|---|---|
-| TLS | curl_cffi `firefox147` + 로그인 브라우저 ja3 덮어쓰기 | ja3 / JA4 / peetprint 동일 (덮어쓰기 없으면 158 이 뺀 암호 2개·그룹 2개 때문에 다름) |
-| HTTP2 | curl_cffi 파이어폭스 타겟 | akamai 지문 동일 |
-| 헤더 순서/값 | `default_headers=False` + 직접 순서 구성 | XMLHttpRequest, fetch GET/POST(JSON/폼/multipart), 문서 이동 모두 동일 |
+| TLS | curl_cffi `firefox147` + 로그인 브라우저 ja3 덮어쓰기, TLS 세션 재개 끔 | ja3 / JA4 / peetprint 동일. 재개를 켜면 재접속 ClientHello 에 확장 35 가 더 붙어 파이어폭스에 없는 JA4 가 되므로 끔 |
+| HTTP2 | curl_cffi 파이어폭스 타겟 + 요청별 HEADERS weight (+ 포크 curl_cffi 면 첫 스트림 ID 3, 요청마다 스트림 WINDOW_UPDATE 12451840) | akamai 지문 동일, weight 문서 42 / XHR·fetch 22. 포크 사용 시 tls.peet.ws sent_frames 가 브라우저와 동일 |
+| 헤더 순서/값 | `default_headers=False` + 종류별 순서 구성 | 네이버(Referrer-Policy 명시)·fetch: referer 가 accept-encoding 바로 뒤 → content-type → x-cafe-product → content-length → origin → cookie. 정책 없는 페이지·교차 사이트 강등·리다이렉트 hop 은 referer 가 origin 뒤. 카페 UI 의 댓글 작성/답글/삭제·글쓰기 캡처와 순서 동일. form 본문 공백 `%20`(axios) |
 | priority | XMLHttpRequest 없음, fetch `u=4`, 문서 `u=0, i` | 카페 API 는 XMLHttpRequest(axios) |
-| 쿠키 | curl jar 미사용, CookieStore 가 파이어폭스 위치에 Cookie 헤더 | 동일 |
-| Referer/Origin | strict-origin-when-cross-origin, POST·CORS 시 Origin | 파이어폭스 규칙 |
+| 쿠키 | curl jar 미사용, CookieStore 가 Set-Cookie 원본을 직접 파싱 | h2 에서 쿠키마다 별도 `cookie:` 헤더 (path 긴 것 먼저, 같으면 생성 순). Expires/Max-Age/HttpOnly 보존 |
+| Referer/Origin | 네이버는 `Referrer-Policy: unsafe-url` 이라 교차 출처(apis, gw)에도 전체 URL (교차 사이트 XHR/fetch 는 출처로 강등). 게시글/댓글 XHR 은 iframe URL(`?fromNext=true`) | 리다이렉트 [실측]: sec-fetch-site 체인 누적, 교차 출처를 거치면 Origin null, 301/302 POST·303 은 GET 으로 바뀌고 content-* 제거 |
+| x-cafe-product | apis.naver.com / article.cafe.naver.com XHR 전부 `pc` | 프론트 캡처와 일치 |
+| 남은 차이 | 공식 curl_cffi 사용 시: 첫 h2 스트림 ID(브라우저 3, 우리 1), 요청 스트림 WINDOW_UPDATE 없음 | 포크 curl_cffi 로 해결 (위 "포크 curl_cffi"). 브라우저는 GET 포함 모든 요청에서 HEADERS 직후 보냄 [실측 2026-11-13 로컬 h2 서버] |
 
 ## 상태 메모
 
 - 사람 세션 실측 (2026-11-13, Aside 브라우저 로그인 세션에서 카페 작업 수행 + 트래픽 캡처):
   카페 홈/메인/게시글 로드/목록/댓글 작성/좋아요 등록·취소의 실제 요청이 endpoints.py 구현과
   엔드포인트·헤더 수준에서 일치함을 확인 (CommentPost.json 현행 재확인).
-  좋아요 content ID 네임스페이스: 사람 브라우저는 {cafeId}_loyaltylife_{articleId},
-  기존 E2E 실측은 {cafeId}_{slug}_{articleId} - likes.content_ids() 로 두 후보 순회.
+  좋아요 content ID: {cafeId}_{slug}_{articleId}, slug 는 그 카페의 참 slug (소문자).
+  [실측 2026-11-13 정정] 예전 메모의 "loyaltylife 네임스페이스"는 카페 30857348 의 slug 였을 뿐이다.
+  틀린 slug 로 조회해도 서버는 빈 결과가 아니라 reactions=[] 콘텐츠를 돌려주므로, status() 는 반응이 비면
+  게시글 상세의 cafe.url 로 재조회하고 like/unlike 는 항상 참 slug 를 쓴다.
   좋아요 등록/취소는 route-like /v1/services/CAFE/contents/{cid}?_method=POST|DELETE (JSONP) 확인.
   신규: likes.members() (gw/v5 likeIt/members, 라이브 응답으로 LikeMembers/LikeUser 모델 확정),
   comments.best() (gw/v1 best-comments, 응답 키 result.comments - 베스트 미선정 시 실제 빈 목록),
@@ -145,7 +240,18 @@ asyncio.run(main())
   삭제 댓글은 목록에서 완전 사라짐]). comments.add/reply 는 comment_id 를 반환
   (응답은 플랫 {"commentId", "refCommentId"} - 실측).
 - 실측 검증 (2026-11-12): 게시판 목록, 게시글 목록, 게시글 읽기, 댓글/대댓글 조회, 좋아요 조회,
-  로그인 식별자, slug -> cafeId, 내 카페 목록(homepc, 비어 있으면 레거시 GNB 폴백), 내 정보.
+  로그인 식별자, slug -> cafeId, 내 카페 목록, 내 정보.
+- 2026-11-13 재실측 정정:
+  - 내 카페 목록: homepc 응답 목록은 `message.result.myCafe.cafes` (예전 코드가 경로를 잘못 읽어 항상
+    GNB 폴백으로 빠졌음). GNB 폴백은 이제 순차 요청.
+  - 댓글 페이지: 쿼리 `?page=` 는 무시되고 경로 `/comments/pages/{n}` 으로 지정 (`size` 쿼리는 적용).
+    마지막을 넘는 번호는 마지막 페이지를 다시 준다.
+  - 게시글 목록 페이지: `lastNavigationPageNumber` 는 현재 10페이지 묶음의 끝, `visibleNextButton` 은 다음
+    묶음 유무. `PageInfo.has_next` 는 `page < last_page` 로 계산 (원래 값은 `has_next_block`).
+    범위를 넘는 page 는 오류 없이 1페이지를 준다.
+  - 비회원 요약 글의 `readCount` 는 "4만" 같은 표시 문자열 (`as_count` 로 해석).
+  - 오류 코드: 없는 글 404/4003, 없는 카페 400/0010, 멤버 전용 댓글 403/4004, 비멤버 등급 500/40003,
+    비로그인 likeIt/members 401/0004 (`NotLoggedInError`).
 - 쓰기 실측 검증 (브라우저 캡처 기반, 실제 작성 성공):
   - 글쓰기: `editor/v2.0/cafes/{id}/menus/{menu}/articles` + SmartEditor contentJson (`utils/editor.py`)
   - 이미지: 에디터 JWT -> 사진 세션키 -> `upphoto simpleUpload` (`services/photos.py`)
@@ -171,5 +277,5 @@ asyncio.run(main())
 
 ## 주의
 
-- `caffeinate/profile/cookies.json` 에는 네이버 세션 토큰이 들어있다. 공유/업로드 금지.
+- 프로필 폴더의 `cookies.json` 에는 네이버 세션 토큰이 들어있다. 공유/업로드 금지 (배포 패키지에서는 제외되도록 pyproject 에 설정).
 - 짧은 시간 대량 요청은 계정 제재 위험이 있다. `Settings.max_retries` / `retry_backoff` 참고.

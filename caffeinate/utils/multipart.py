@@ -29,7 +29,8 @@ def encode_multipart(
         out += f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"\r\n\r\n'.encode()
         out += value.encode("utf-8") + b"\r\n"
     for f in files:
-        filename = f.filename.replace('"', "%22")
+        # 파이어폭스는 파일명의 " / CR / LF 를 %22 / %0D / %0A 로 바꿔 보낸다 (헤더 주입 방지)
+        filename = f.filename.replace('"', "%22").replace("\r", "%0D").replace("\n", "%0A")
         out += (
             f'--{boundary}\r\nContent-Disposition: form-data; name="{f.name}"; filename="{filename}"\r\n'
             f"Content-Type: {f.content_type}\r\n\r\n"

@@ -3,6 +3,7 @@ from typing import TYPE_CHECKING
 
 from ..core.errors import NotLoggedInError
 from ..core.session import CafeSession
+from ..utils.parsing import is_ascii_digits
 
 if TYPE_CHECKING:
     from ..lib import Caffeinate
@@ -25,10 +26,10 @@ class BaseService:
         로컬에서 먼저 NotLoggedInError 로 변환한다. 쿠키가 있어도 만료면 서버 오류코드로 걸러진다.
         """
         if not self.session.cookies.has_login:
-            raise NotLoggedInError("로그인 쿠키가 없습니다. Caffeinate.login() 으로 먼저 로그인하세요.")
+            raise NotLoggedInError("로그인 쿠키가 없습니다.")
 
 
 def gw_params(cafe: int | str, **extra: str | int) -> dict[str, str | int]:
     """gw v4 경로의 카페 부분이 숫자 ID 면 useCafeId=true, slug 면 false (실측: 반대면 400)"""
-    is_id = isinstance(cafe, int) or str(cafe).isdigit()
+    is_id = isinstance(cafe, int) or is_ascii_digits(str(cafe))
     return {"useCafeId": "true" if is_id else "false", **extra}

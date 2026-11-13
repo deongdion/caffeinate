@@ -16,24 +16,37 @@ def comment_id_from(resp: Any) -> int:
     """
     if isinstance(resp, dict):
         v = resp.get("commentId")
-        if isinstance(v, int):
+        if isinstance(v, int) and not isinstance(v, bool):
             return v
+        if isinstance(v, str) and v.isascii() and v.isdigit():
+            return int(v)
     raise ParseError(f"댓글 응답에서 commentId 를 찾지 못했습니다: {str(resp)[:200]}")
 
 
 class CommentService(BaseService):
     async def page(self, ref: ArticleRef | str, *, page: int = 1, size: int = 100) -> CommentPage:
-        """댓글 한 페이지 [실측: result.comments.items, hasNext/hasPrev]"""
+        """댓글 한 페이지 [실측: result.comments.items, hasNext/hasPrev]
+
+        [실측 2026-11-13] 페이지 번호는 경로 /comments/pages/{page} 로 보내야 적용된다.
+        예전처럼 쿼리 ?page= 로 보내면 무시되고 항상 첫 페이지가 와서, 댓글 100개 초과 글은
+        all() 이 첫 100개만 돌려주고 끝났다 (341개 글로 확인). size 는 쿼리로 적용된다.
+        """
         r = await self._client.articles.resolve(ref)
         data = await self.session.get_json(
-            endpoints.gw_comments(r.cafe_id, r.article_id),
-            params=gw_params(r.cafe_id, page=page, size=size),
-            referer=endpoints.article_page(r.cafe_id, r.article_id),
+            endpoints.gw_comments(r.cafe_id, r.article_id, max(1, page)),
+            # [실측 2026-11-13] 프론트: comments/pages/{n}?requestFrom=A&orderBy=asc
+            params=gw_params(r.cafe_id, requestFrom="A", orderBy="asc", size=size),
+            headers=dict(endpoints.PRODUCT_HEADERS),  # [실측 2026-11-13] 프론트는 apis/gw XHR 전부에 붙인다
+            referer=endpoints.article_frame_page(r.cafe_id, r.article_id),
         )
         return CommentPage.from_api(dig(data, "result", default={}))
 
     async def all(self, ref: ArticleRef | str, *, max_pages: int = 20, size: int = 100) -> list[Comment]:
-        """모든 댓글 (평탄화 목록, hasNext 따라 페이지 순회). 트리는 models.build_tree()"""
+        """모든 댓글 (평탄화 목록, hasNext 따라 페이지 순회). 트리는 models.build_tree()
+
+        max_pages * size 개를 넘는 댓글은 잘린다 (기본 2000개). 마지막을 넘는 페이지 번호는 서버가
+        마지막 페이지를 다시 주므로, 새 댓글이 없는 페이지가 오면 멈춘다.
+        """
         r = await self._client.articles.resolve(ref)
         out: list[Comment] = []
         seen: set[int] = set()
@@ -52,6 +65,7 @@ class CommentService(BaseService):
         [실측 2026-11-13: E2E 성공] cafe-mobile/CommentPost.json (form).
         응답은 플랫 {"commentId": ..., "refCommentId": ...} 이다.
         """
+        self._require_login()
         r = await self._client.articles.resolve(ref)
         resp = await self._post(endpoints.COMMENT_POST, r, {"content": text, "stickerId": sticker_id})
         return comment_id_from(resp)
@@ -61,6 +75,7 @@ class CommentService(BaseService):
 
         [실측 2026-11-12: E2E 성공] cafe-mobile/CommentReply.json (refCommentId=부모 댓글).
         """
+        self._require_login()
         r = await self._client.articles.resolve(ref)
         resp = await self._post(
             endpoints.COMMENT_REPLY, r, {"content": text, "stickerId": sticker_id, "refCommentId": comment_id}
@@ -71,27 +86,38 @@ class CommentService(BaseService):
         """댓글 삭제 -> 응답 {"msg": "Success"}
 
         [실측 2026-11-13: E2E 성공] cafe-mobile/CommentDelete.json,
-        폼: commentId + cafeId/articleId/requestFrom=A (Post/Reply 동일 계열).
+        폼: cafeId, menuId, articleId, commentId, requestFrom=A (menu_id 를 모르면 게시글 상세로 확인).
         삭제된 댓글은 gw 목록에서 완전히 사라진다 (톰스톤 없음).
         """
-        r = await self._client.articles.resolve(ref)
         self._require_login()
+        r = await self._client.articles.resolve(ref)
+        menu_id = r.menu_id or (await self._client.articles.get(r)).ref.menu_id or 0
         return await self.session.post_form(
             endpoints.COMMENT_DELETE,
-            data={"commentId": comment_id, "cafeId": r.cafe_id, "articleId": r.article_id, "requestFrom": "A"},
-            referer=endpoints.article_page(r.cafe_id, r.article_id),
+            # [실측 2026-11-13 UI 캡처] 프론트 폼 순서: cafeId, menuId, articleId, commentId, requestFrom
+            data={
+                "cafeId": r.cafe_id,
+                "menuId": menu_id,
+                "articleId": r.article_id,
+                "commentId": comment_id,
+                "requestFrom": "A",
+            },
+            headers=dict(endpoints.PRODUCT_HEADERS),  # [실측 2026-11-13 UI 캡처] content-type 바로 뒤
+            referer=endpoints.article_frame_page(r.cafe_id, r.article_id),
         )
 
     async def best(self, ref: ArticleRef | str) -> list[Comment]:
         """베스트 댓글
 
         [실측 2026-11-13 사람 세션 캡처] 게시글 로드 시 브라우저가 gw/v1 best-comments 를 호출한다.
-        응답 스키마는 미검증이라 result 아래 첫 목록을 Comment 로 파싱한다.
+        응답은 result{cafeId, articleId, comments[], commentCount} (베스트 미선정 글은 빈 목록, 비로그인도 200).
+        항목 스키마는 베스트가 있는 글로 아직 확인하지 못해 gw 댓글 항목과 같다고 보고 파싱한다 [추정].
         """
         r = await self._client.articles.resolve(ref)
         data = await self.session.get_json(
             endpoints.best_comments(r.cafe_id, r.article_id),
-            referer=endpoints.article_page(r.cafe_id, r.article_id),
+            headers=dict(endpoints.PRODUCT_HEADERS),  # [실측 2026-11-13] 프론트는 apis/gw XHR 전부에 붙인다
+            referer=endpoints.article_frame_page(r.cafe_id, r.article_id),
         )
         result = dig(data, "result", default={})
         items: list[Any] = []
@@ -119,7 +145,8 @@ class CommentService(BaseService):
                 return await self.session.post_form(
                     url,
                     data={**fields, "cafeId": r.cafe_id, "articleId": r.article_id, "requestFrom": "A"},
-                    referer=endpoints.article_page(r.cafe_id, r.article_id),
+                    headers=dict(endpoints.PRODUCT_HEADERS),  # [실측 2026-11-13 UI 캡처] content-type 바로 뒤
+                    referer=endpoints.article_frame_page(r.cafe_id, r.article_id),
                 )
             except NaverAPIError as e:
                 if str(e.code) != "2001" or attempt >= attempts - 1:

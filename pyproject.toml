@@ -1,0 +1,66 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "caffeinate"
+dynamic = ["version"]
+description = "네이버 카페 비동기 파이썬 클라이언트 (Camoufox 로그인 + curl_cffi 브라우저 동일 지문 요청)"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "curl_cffi>=0.16",      # firefox147 impersonate 타겟 + ja3 덮어쓰기
+    # 파이어폭스 h2 첫 스트림 ID(3)/스트림 WINDOW_UPDATE 까지 맞추려면 포크 휠로 교체 (README "포크 curl_cffi"):
+    #   github.com/deongdion/curl_cffi 브랜치 caffeinate -> scripts/build_windows.ps1 로 만든
+    #   curl_cffi-0.16.3+caffeinate.1-cp310-abi3-win_amd64.whl 을 pip install --force-reinstall --no-deps
+    #   (git+ 소스 설치는 패치 안 된 libcurl 을 받아 링크하므로 효과 없음)
+    "camoufox>=0.5.9",      # 로그인 브라우저 (설치 후 `python -m camoufox fetch` 필요)
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Framework :: AsyncIO",
+    "Typing :: Typed",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.6", "mypy>=1.10"]
+
+[tool.setuptools.dynamic]
+version = { attr = "caffeinate.__version__" }
+
+[tool.setuptools.packages.find]
+include = ["caffeinate*"]
+exclude = ["caffeinate.profile*", "tests*"]
+
+[tool.setuptools.package-data]
+caffeinate = ["py.typed"]
+
+# 세션 토큰/지문/로그인 브라우저 프로필은 절대 배포물에 넣지 않는다
+[tool.setuptools.exclude-package-data]
+caffeinate = ["profile/*", "profile/**/*"]
+
+[tool.ruff]
+line-length = 120
+extend-exclude = ["caffeinate/profile"]
+
+[tool.ruff.lint]
+# requires-python>=3.11 로 대상 버전이 올라가며 새로 잡히는 표기 규칙. 기존 코드(timezone.utc) 유지.
+ignore = ["UP017"]
+
+[tool.mypy]
+python_version = "3.11"
+files = ["caffeinate"]
+warn_redundant_casts = true
+check_untyped_defs = true
+
+[[tool.mypy.overrides]]
+module = ["camoufox", "camoufox.*", "browserforge", "browserforge.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]  # 설치 없이 저장소 루트에서 `pytest` 실행
+addopts = "-ra"
+# Windows Proactor 루프에서 curl_cffi 가 selector 스레드를 붙인다는 안내 (동작 영향 없음)
+filterwarnings = ["ignore:Proactor event loop:RuntimeWarning", "ignore::curl_cffi.aio.CurlCffiWarning"]

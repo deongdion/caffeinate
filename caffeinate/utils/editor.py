@@ -83,9 +83,17 @@ def build_content_json(text: str, images: "list[UploadedImage] | None" = None) -
     textNode 값이 빈 문자열("" ) 인 문단이 된다.
     dio 텍스트 항목의 st 는 빈 줄을 건너뛰고 "\n" 으로 잇은 바이트 길이
     ("첫 줄\\n\\n셋째 줄" -> 18). 빈 줄을 버리면 두 문단으로 저장된다.
+
+    [실측 2026-11-13 E2E] 줄 -> 문단 1:1 로 저장된다: CRLF/단독 CR/LF 모두 줄바꿈, 빈 줄(연속 포함)은 각각
+    빈 문단(뷰어에서 \\u200b), 공백만 있는 줄은 공백이 그대로 남은 문단. 이모지·& < > " 도 그대로 보존.
+    (공백만 있는 줄을 dio st 계산에서 빈 줄처럼 건너뛰어도 서버는 정상 저장했다.)
     """
     images = images or []
-    lines = text.replace("\r\n", "\n").split("\n") if text else []
+    if not text and not images:
+        # dio 가 빈 배열이면 서버가 500 (위 실측) -> 요청 전에 막는다
+        raise ValueError("본문 텍스트나 이미지 중 하나는 있어야 합니다")
+    # CRLF / 단독 CR 모두 줄바꿈으로 본다 (브라우저 입력은 줄바꿈이 \n 뿐 - 단독 \r 이 문단 안에 남지 않게)
+    lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n") if text else []
     paragraphs = [_paragraph(ln) for ln in lines]
 
     components: list[dict[str, Any]] = []
@@ -110,4 +118,4 @@ def build_content_json(text: str, images: "list[UploadedImage] | None" = None) -
             "components": components,
         }
     }
-    return json.dumps(doc, ensure_ascii=False)
+    return json.dumps(doc, ensure_ascii=False, separators=(",", ":"))  # [실측 2026-11-13] 프론트는 compact JSON

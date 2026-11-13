@@ -9,6 +9,7 @@
 2~3단계 헤더/쿼리/쿠키는 브라우저 캡처(2026-11-12)와 동일하게 맞췄다.
 본문 이미지가 404 가 되던 원인은 업로드가 아니라 contentJson 의 path 값이었다 (utils/editor.py 참고).
 """
+import mimetypes
 import uuid
 from pathlib import Path
 
@@ -65,7 +66,8 @@ class PhotoService(BaseService):
         """
         token, user_id = await self.editor_session(cafe_id, menu_id)
         key = await self.session_key(cafe_id, menu_id, token=token)
-        content_type, body = encode_multipart([FilePart(name="image", filename=filename, data=data)])
+        part = FilePart(name="image", filename=filename, data=data, content_type=_image_mime(filename, data))
+        content_type, body = encode_multipart([part])
         resp = await self.session.post(
             endpoints.photo_upload(key),
             params=_upload_query(user_id),
@@ -83,6 +85,33 @@ class PhotoService(BaseService):
     async def upload_file(self, cafe_id: int, menu_id: int, path: str | Path) -> UploadedImage:
         p = Path(path)
         return await self.upload(cafe_id, menu_id, p.read_bytes(), p.name)
+
+
+_MAGIC_MIME: tuple[tuple[bytes, str], ...] = (
+    (b"\x89PNG\r\n\x1a\n", "image/png"),
+    (b"\xff\xd8\xff", "image/jpeg"),
+    (b"GIF87a", "image/gif"),
+    (b"GIF89a", "image/gif"),
+    (b"BM", "image/bmp"),
+)
+
+
+def _image_mime(filename: str, data: bytes) -> str:
+    """multipart 파트의 Content-Type.
+
+    브라우저는 파일 선택 시 확장자로 정한 MIME(File.type)을 보내고, 모를 때만
+    application/octet-stream 을 쓴다 [추정: 파이어폭스 규칙, 업로드 캡처의 파트 헤더는 미확인].
+    예전 구현은 항상 octet-stream 이었다. 확장자가 없거나 모르면 파일 시그니처로 판단한다.
+    """
+    guessed, _ = mimetypes.guess_type(filename)
+    if guessed and guessed.startswith("image/"):
+        return guessed
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    for magic, mime in _MAGIC_MIME:
+        if data.startswith(magic):
+            return mime
+    return "application/octet-stream"
 
 
 def _upload_query(user_id: str) -> dict[str, str]:

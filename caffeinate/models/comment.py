@@ -24,6 +24,8 @@ class Comment:
     is_deleted: bool = False
     is_mine: bool = False
     is_article_writer: bool = False
+    image_url: str = ""          # 사진 댓글 (items[].image.url) [실측 2026-11-13]
+    reply_to_nick: str = ""      # 대댓글이 언급한 상대 (items[].replyMember.nick) [실측 2026-11-13]
     replies: list["Comment"] = field(default_factory=list)  # build_tree() 로 채움
     raw: JSON = field(default_factory=dict, repr=False, compare=False)
 
@@ -41,6 +43,8 @@ class Comment:
             is_deleted=bool(d.get("isDeleted", False)),
             is_mine=bool(d.get("self", False)),
             is_article_writer=bool(d.get("isArticleWriter", False)),
+            image_url=str(as_dict(d.get("image")).get("url") or ""),
+            reply_to_nick=str(as_dict(d.get("replyMember")).get("nick") or ""),
             raw=d,
         )
 

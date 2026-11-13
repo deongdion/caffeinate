@@ -8,9 +8,13 @@
 
 [실측 2026-11-13 tls.peet.ws] Camoufox 158 vs curl_cffi firefox147:
   akamai(h2) 같음, ja4/peetprint 다름 (158 은 c009/c00a 암호와 ffdhe 256/257 그룹을 뺐다).
-  firefox147 + ja3=158 실측값 -> ja3/ja4/peetprint 모두 같음.
+  firefox147 + ja3=158 실측값 -> 전체 핸드셰이크의 ja3/ja4/peetprint 와 확장 내용(키 공유 그룹, 서명 알고리즘,
+  delegated_credentials, compress_certificate, ALPN h2/http1.1) 모두 같음. Camoufox headless/headed 차이 없음.
+  세션 재개 ClientHello 는 다르므로 세션에서 재개를 끈다 (core/session.py 설명 참고).
+  Accept-Language 는 Camoufox locale=ko-KR 일 때 "ko-KR,ko;q=0.9" (navigator.languages = [ko-KR, ko]) 실측.
 """
 import json
+import logging
 from pathlib import Path
 from typing import Final
 
@@ -32,6 +36,7 @@ FIREFOX_JA3: Final[dict[int, str]] = {
     ),
 }
 DEFAULT_MAJOR: Final = 158
+logger = logging.getLogger("caffeinate")
 
 
 def available_targets() -> set[str]:
@@ -96,5 +101,8 @@ def load_or_create(path: Path, *, force_new: bool = False) -> Fingerprint:
         except (ValueError, KeyError, OSError):
             pass
     fp = builtin()
-    save(fp, path)
+    try:
+        save(fp, path)
+    except OSError as e:  # 읽기 전용 위치 등 - 메모리 지문으로 계속 진행
+        logger.warning("지문 파일을 저장하지 못했습니다 (%s): %s - 내장 기본 지문으로 계속합니다", path, e)
     return fp

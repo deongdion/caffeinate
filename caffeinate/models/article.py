@@ -7,7 +7,7 @@ from typing import Any, Self
 
 from ..enums import ArticleListItemType
 from ..utils.html import html_to_text
-from ..utils.parsing import JSON, as_dict, as_int, ms_to_datetime, pick
+from ..utils.parsing import JSON, as_count, as_dict, as_int, ms_to_datetime, pick
 from .board import Board
 from .cafe import Cafe
 from .member import Writer
@@ -29,15 +29,31 @@ class ArticleRef:
 
 @dataclass(slots=True, kw_only=True)
 class PageInfo:
-    last_page: int = 0
-    has_next: bool = False
+    """boardlist pageInfo
+
+    [실측 2026-11-13] 서버 값은 "페이지 이동 막대(10페이지 단위)" 기준이다.
+    lastNavigationPageNumber = 현재 10페이지 묶음의 마지막 번호 (11페이지를 요청하면 20),
+    visibleNextButton = 다음 10페이지 묶음이 있는지. 그래서 has_next 는 요청한 페이지 번호를 함께
+    넘겨야(page=) "다음 페이지가 있는지" 가 된다 (5페이지짜리 게시판의 3페이지: 묶음 다음은 없지만 4페이지는 있음).
+    범위를 넘는 페이지 번호를 요청하면 서버는 오류 없이 첫 페이지를 돌려준다 -> has_next 로 멈출 것.
+    """
+
+    last_page: int = 0                 # 현재 10페이지 묶음의 마지막 페이지 번호
+    has_next: bool = False             # 다음 페이지가 있는지 (page 를 알면 page < last_page 포함)
+    has_next_block: bool = False       # 서버 visibleNextButton 원값 (다음 10페이지 묶음)
+    total_count: int | None = None     # totalArticleCount (전체글보기 menuId=0 에서만 옴)
 
     @classmethod
-    def from_api(cls, d: Any) -> Self:
+    def from_api(cls, d: Any, *, page: int = 0) -> Self:
         d = as_dict(d)
+        last_page = as_int(d.get("lastNavigationPageNumber"))
+        next_block = bool(d.get("visibleNextButton", False))
+        total = d.get("totalArticleCount")
         return cls(
-            last_page=as_int(d.get("lastNavigationPageNumber")),
-            has_next=bool(d.get("visibleNextButton", False)),
+            last_page=last_page,
+            has_next=next_block or (0 < page < last_page),
+            has_next_block=next_block,
+            total_count=as_int(total) if total is not None else None,
         )
 
 
@@ -200,8 +216,8 @@ class Article:
             subject=str(result.get("subject") or ""),
             writer=Writer.from_api(writer, level_src={"memberLevelName": writer.get("memberLevelName")}),
             written_at=ms_to_datetime(result.get("writeDate")),
-            read_count=as_int(result.get("readCount")),
-            comment_count=as_int(result.get("commentCount")),
+            read_count=as_count(result.get("readCount")),  # [실측] 요약 응답은 "4만" 같은 표시 문자열
+            comment_count=as_count(result.get("commentCount")),
             content_html=html.escape(str(result.get("summary") or "")),
             authority=ArticleAuthority.from_api(result.get("authority")),
             raw=result,

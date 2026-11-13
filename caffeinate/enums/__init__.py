@@ -8,7 +8,7 @@ from .cafe import (
     SortBy,
     ViewType,
 )
-from .http import HttpMethod, RequestKind, SecFetchDest, SecFetchMode, SecFetchSite
+from .http import HttpMethod, ReferrerPolicy, RequestKind, SecFetchDest, SecFetchMode, SecFetchSite
 
 __all__ = [
     "ArticleListItemType",
@@ -18,6 +18,7 @@ __all__ = [
     "MenuType",
     "Platform",
     "ReactionType",
+    "ReferrerPolicy",
     "RequestKind",
     "SecFetchDest",
     "SecFetchMode",

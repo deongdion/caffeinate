@@ -24,7 +24,8 @@ class Cafe:
     @classmethod
     def from_api(cls, d: Any) -> Self:
         d = as_dict(d)
-        image = pick(d, "image", "cafeImage", "thumbnail")
+        # homepc myCafe.cafes[] 는 cafeThumbnailPcUrl / cafeIconImageUrl [실측 2026-11-13]
+        image = pick(d, "image", "cafeImage", "thumbnail", "cafeIconImageUrl", "cafeThumbnailPcUrl")
         return cls(
             cafe_id=as_int(pick(d, "cafeId", "id", "clubId", "clubid", "cafeid")),
             name=str(pick(d, "cafeName", "name", "pcCafeName", "cafeNm", default="")),

@@ -13,6 +13,7 @@ class MemberService(BaseService):
         data = await self.session.get_json(
             endpoints.MEMBER_IDENTIFIER,
             params={"cafeId": cafe_id} if cafe_id else None,
+            headers=dict(endpoints.PRODUCT_HEADERS),  # [실측 2026-11-13] 프론트는 apis/gw XHR 전부에 붙인다
             referer=endpoints.cafe_page(cafe_id) if cafe_id else CAFE_SECTION_HOME,
         )
         return Identifier.from_api(dig(data, "message", "result") or dig(data, "result"))

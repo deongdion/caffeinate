@@ -14,10 +14,22 @@ caffeinate 고수준 비동기 클라이언트
             comments = await cafe.comments.all(article.ref)
 
     asyncio.run(main())
+
+동기 스크립트/REPL 에서는 run() 으로 한 번에:
+
+    import caffeinate
+    article = caffeinate.run(lambda cafe: cafe.articles.get(URL))
+
+디버그 로그 (요청/재시도 원인 추적):
+
+    caffeinate.enable_logging()          # logging.getLogger("caffeinate") 에 콘솔 핸들러 부착
 """
+import asyncio
+import logging
 import warnings
+from collections.abc import Awaitable, Callable
 from types import TracebackType
-from typing import Self
+from typing import Self, TypeVar
 
 from .auth.login import LoginOptions, browser_login
 from .core.config import Settings
@@ -34,6 +46,9 @@ from .services import (
     MemberService,
     PhotoService,
 )
+
+logger = logging.getLogger("caffeinate")
+T = TypeVar("T")
 
 
 class Caffeinate:
@@ -60,6 +75,14 @@ class Caffeinate:
         if isinstance(cookies, list):
             cookies = CookieStore(cookies)
         self.session = CafeSession(self.settings, fingerprint=fingerprint, cookies=cookies)
+        logger.debug(
+            "Caffeinate 생성: 프로필=%s, 로그인 쿠키=%s, 지문=%s %s (%s)",
+            self.settings.profile_dir,
+            "있음" if self.session.cookies.has_login else "없음",
+            self.session.fingerprint.brand.value,
+            self.session.fingerprint.major,
+            self.session.fingerprint.source,
+        )
         if self.session.cookies.has_login and not self.session.fingerprint.from_login:
             warnings.warn(
                 "로그인 쿠키는 있지만 지문이 로그인 브라우저에서 온 것이 아닙니다. "
@@ -88,14 +111,25 @@ class Caffeinate:
         await self.session.__aexit__(exc_type, exc, tb)
 
     async def close(self) -> None:
+        """세션 종료 (async with 를 쓰지 않았을 때). 갱신된 로그인 쿠키는 이때 저장된다."""
         await self.session.close()
+
+    def __repr__(self) -> str:
+        login = "로그인 쿠키 있음" if self.session.cookies.has_login else "비로그인"
+        return f"<Caffeinate {login}, profile_dir={str(self.settings.profile_dir)!r}>"
 
     # ---------------------------------------------------------------- 편의
     @property
     def fingerprint(self) -> Fingerprint:
         return self.session.fingerprint
 
+    @property
+    def has_login_cookies(self) -> bool:
+        """로그인 쿠키(NID_AUT/NID_SES)가 로컬에 있는지 - 서버 요청 없음, 만료 여부는 모른다"""
+        return self.session.cookies.has_login
+
     async def is_logged_in(self) -> bool:
+        """서버에 물어 실제 로그인 상태 확인 (쿠키 만료 검사). 오류면 False"""
         return await self.members.is_logged_in()
 
     @classmethod
@@ -111,12 +145,60 @@ class Caffeinate:
         지문(UA/언어/TLS)은 로그인한 브라우저에서 유도해 profile/fingerprint.json 에 함께 저장한다.
         """
         settings = settings or Settings()
+        logger.info("브라우저 로그인 시작 (프로필: %s)", settings.profile_dir)
         result = await browser_login(settings, options)
         result.cookies.save(settings.cookies_file)
         save(result.fingerprint, settings.fingerprint_file)
+        logger.info("로그인 쿠키/지문 저장: %s", settings.profile_dir)
         return cls(settings, fingerprint=result.fingerprint, cookies=CookieStore.load(settings.cookies_file))
 
 
 def load_fingerprint(settings: Settings | None = None, *, force_new: bool = False) -> Fingerprint:
     """저장된 지문 로드 (없으면 내장 기본값. 로그인하면 로그인 브라우저 값으로 바뀐다)"""
     return load_or_create((settings or Settings()).fingerprint_file, force_new=force_new)
+
+
+def run(fn: Callable[["Caffeinate"], Awaitable[T]], settings: Settings | None = None) -> T:
+    """동기 코드에서 한 번 호출: 클라이언트를 열고 fn(cafe) 를 실행한 뒤 닫는다.
+
+        boards = caffeinate.run(lambda cafe: cafe.boards.all(18886295))
+
+        async def job(cafe: Caffeinate) -> list[str]:
+            page = await cafe.boards.articles(18886295, 2)
+            return [a.subject for a in page]
+        subjects = caffeinate.run(job)
+
+    이미 이벤트 루프가 돌고 있는 곳(Jupyter, async 함수 안)에서는 쓸 수 없다 -> await 로 직접 호출.
+    """
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        pass
+    else:
+        raise RuntimeError(
+            "이미 이벤트 루프가 실행 중입니다 (Jupyter/async 함수 안). caffeinate.run() 대신 "
+            "`async with Caffeinate() as cafe: await ...` 로 직접 await 하세요."
+        )
+
+    async def _main() -> T:
+        async with Caffeinate(settings) as cafe:
+            return await fn(cafe)
+
+    return asyncio.run(_main())
+
+
+def enable_logging(level: int | str = logging.DEBUG, *, fmt: str | None = None) -> logging.Logger:
+    """"caffeinate" 로거에 콘솔 핸들러를 붙여 디버그 로그를 본다 (중복 호출해도 핸들러는 하나).
+
+    라이브러리는 기본으로 NullHandler 만 달려 있어 아무것도 출력하지 않는다.
+    애플리케이션에서 logging.basicConfig 등으로 직접 설정해도 된다 (로거 이름 "caffeinate").
+    쿠키 값/비밀번호는 로그에 남기지 않는다.
+    """
+    log = logging.getLogger("caffeinate")
+    log.setLevel(level)
+    if not any(getattr(h, "_caffeinate", False) for h in log.handlers):
+        handler = logging.StreamHandler()
+        handler.setFormatter(logging.Formatter(fmt or "%(asctime)s %(levelname)s %(name)s: %(message)s"))
+        handler._caffeinate = True  # type: ignore[attr-defined]
+        log.addHandler(handler)
+    return log
