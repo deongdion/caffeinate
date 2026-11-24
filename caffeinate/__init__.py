@@ -66,6 +66,7 @@ from .enums import (
 from .lib import Caffeinate, enable_logging, load_fingerprint, run
 from .models import (
     COMMENT_MAX_BYTES,
+    STICKER_PACKS,
     Article,
     ArticleAuthority,
     ArticlePage,
@@ -150,6 +151,7 @@ __version__ = "0.4.0"
 
 __all__ = [
     "COMMENT_MAX_BYTES",
+    "STICKER_PACKS",
     "Align",
     "Article",
     "ArticleAuthority",

@@ -8,6 +8,7 @@ from .article import (
     PageInfo,
 )
 from .blocks import (
+    STICKER_PACKS,
     Block,
     Cell,
     Code,
@@ -74,6 +75,7 @@ from .spec import SpecError
 
 __all__ = [
     "COMMENT_MAX_BYTES",
+    "STICKER_PACKS",
     "Article",
     "ArticleAuthority",
     "ArticlePage",

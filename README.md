@@ -224,7 +224,7 @@ await cafe.comments.add(ref, "", sticker_id=sticker)   # 댓글 스티커
 | `Image(source, represent=, link=, caption=)` | `image` | 첫 사진이 대표 | ✅ 글 사이사이 여러 장, 캡션 |
 | `ImageGroup(items, layout)` | `imageGroup` | `SLIDE` | ✅ (`COLLAGE` 는 뷰어 JS 가 그림) |
 | `ImageStrip(items)` | `imageStrip` | | ✅ |
-| `Sticker(pack_code, seq, w, h)` | `sticker` / 댓글 `stickerId` | 185×160 | ✅ 글·댓글, 움직이는/정지 묶음 |
+| `Sticker(pack_code, seq, w, h)` | `sticker` / 댓글 `stickerId` | 185×160, 움직임 = `STICKER_PACKS` | ✅ 글·댓글, 움직이는/정지 묶음 |
 | `LinkCard(url, ..., layout=)` | `oglink` | `LARGE_IMAGE` | ✅ 4가지 모양 (서명 없어도 저장) |
 | `RawBlock(dict)` | 아무 컴포넌트 | id 자동 | ✅ |
 
@@ -329,7 +329,26 @@ draft = CommentDraft.from_spec(ai_json, image="a.png")
 - `fill_schema(rich=True)` 면 글 칸에 서식 있는 문단 배열도 받는다 (기본은 문자열, 줄바꿈 = 문단).
 - 모든 칸 필수·추가 키 금지 스키마라 structured output 에 그대로 쓸 수 있다. `fill(strict=False)` 는 일부만 채워도 된다.
 - AI 출력이 틀리면 (모르는 type, 빠진 칸, 표 크기 불일치, 틀린 색·링크 등) 전부 `SpecError` (`ValueError`·`TypeError` 겸용).
+- 투표·일정·수식은 빈 칸(`Vote("", ["", ""])`, `Schedule("", start)`, `Formula("", hint=...)`)으로 템플릿을 만들 수 있다.
+  빈 제목·항목·수식은 보낼 때(`to_dict`)·렌더할 때 `ValueError`.
+- 스티커는 로그인 없이 `Sticker("cafe_001", 3)` 으로 만들어도 된다. 카페 기본 16묶음의 움직임 여부·개수(`STICKER_PACKS`,
+  모두 185×160)를 실측해 넣어 두었다. 움직이는 묶음을 정지(png)로 보내면 저장은 되지만 보기 화면에 "존재하지 않는 스티커" 로 나온다 [실측].
+  범위 밖 번호는 미리 `ValueError`. 스키마 설명에도 묶음별 번호 범위가 들어간다.
+- 스키마는 `"$schema": draft 2020-12` 를 선언한다. 이 선언을 모르는 검사기(claude CLI `--json-schema` 등)에는 그 키만 빼고 보낸다.
 - [실측 2026-11-24] 템플릿 → 채우기 → 글 수정 저장, spec 댓글(글 + 스티커) 등록 확인.
+
+#### `test.py` - 로그인 없이 템플릿 → AI 채우기 → JSON 저장
+
+```bash
+python test.py                  # AI = claude CLI (claude -p --json-schema, 기본 sonnet)
+python test.py --model haiku
+python test.py --dummy          # AI 없이 스키마에서 만든 가짜 값으로 흐름만
+```
+
+게시글 템플릿(소제목·본문·인용구·구분선·표·투표·일정·코드·스티커 + 글/블록 기본 서식)과 댓글 스키마를 AI 로 채우고
+`test_out/` 에 저장한다 (템플릿 spec, fill 스키마, AI 응답, 채운 spec, 채운 contentJson, 댓글 폼).
+스키마 적합, 구조·id·서식 유지, 원본 불변, 저장한 JSON 재로드 왕복 동일을 검사한다.
+[실측 2026-11-24] 저장한 `article_filled.content.json`·`comment_filled.json` 을 그대로 읽어 글 수정·댓글 등록 → 보기 화면에서 전 블록·스티커 렌더 확인.
 
 ### 댓글 블록
 
@@ -539,6 +558,7 @@ mypy caffeinate
 ```
 
 - **실서버 확인**: `python example.py` (읽기). 쓰기는 본인 카페에서 `--write` 로만 확인합니다.
+- **AI 채우기 확인** (로그인 불필요): `python test.py` (`--dummy` 는 AI 없이).
 - **새 버전 배포**: `caffeinate/__init__.py` 의 `__version__` 을 올려 커밋하고, 같은 이름의 태그(`v0.4.1`)를 push 하면
   GitHub Actions 가 세 플랫폼 휠을 빌드·테스트한 뒤 Release 를 만듭니다.
 - **직접 빌드, curl_cffi 새 버전으로 올리기**: [`docs/배포와-업그레이드.md`](docs/배포와-업그레이드.md)
@@ -559,6 +579,7 @@ mypy caffeinate
 
 ### 미배포
 
+- `test.py` (로그인 없이 템플릿 → AI 채우기 → JSON 저장), 빈 칸 투표·일정·수식 템플릿, `STICKER_PACKS` (로그인 없이 맞는 스티커)
 - 카페 만들기 `cafes.create()` (아이콘 업로드, 음성 캡차 OCR 자동 풀이, 입력 검증)
 - `Cafe.is_manager` (homepc `manageCafe`)
 - 글 블록: `Document`, `Text`, `Span`, `Heading`, `Quote`, `Divider`, `Code`, `Table`, `Image`, `ImageGroup`, `ImageStrip`, `Sticker`, `LinkCard`, `RawBlock` (to_dict/from_dict)
