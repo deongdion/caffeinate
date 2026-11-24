@@ -16,12 +16,16 @@ from .cafe import (
 from .editor import (
     Align,
     CodeLayout,
+    FontFamily,
     FontSize,
     ImageGroupLayout,
     LineLayout,
     LinkCardLayout,
+    MaterialType,
     QuotationLayout,
     StickerFormat,
+    VoteResultView,
+    VoteSort,
 )
 from .http import HttpMethod, ReferrerPolicy, RequestKind, SecFetchDest, SecFetchMode, SecFetchSite
 
@@ -34,11 +38,13 @@ __all__ = [
     "CafeOpenType",
     "CaptchaType",
     "CodeLayout",
+    "FontFamily",
     "FontSize",
     "HttpMethod",
     "ImageGroupLayout",
     "LineLayout",
     "LinkCardLayout",
+    "MaterialType",
     "MenuType",
     "Platform",
     "QuotationLayout",
@@ -53,4 +59,6 @@ __all__ = [
     "ThemeDirectory",
     "ValidationResult",
     "ViewType",
+    "VoteResultView",
+    "VoteSort",
 ]

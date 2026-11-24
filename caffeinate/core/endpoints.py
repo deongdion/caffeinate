@@ -120,6 +120,29 @@ PHOTO_SESSION_KEY: Final = "https://platform.editor.naver.com/api/cafepc001/v1/p
 SE_PLATFORM: Final = "https://platform.editor.naver.com/api/cafepc001/v1"
 SE_STICKERS: Final = f"{SE_PLATFORM}/stickers"          # 묶음 목록, /{packCode} 는 묶음 안 스티커
 SE_OGLINK: Final = f"{SE_PLATFORM}/oglink"              # ?url= -> {oglink{summary..}, oglinkSign}
+# [실측 2026-11-24 카페 글쓰기 에디터 캡처] 에디터 설정 apiInfo 의 주소들
+SE_PLACES: Final = f"{SE_PLATFORM}/map/naver/places"     # ?query=&siteSort=0&displayCount=7&page=1
+SE_MATERIALS: Final = f"{SE_PLATFORM}/material/search"   # ?q=&count=8&types=BOOK,..&image.paidType=F
+SE_BROADCASTS: Final = "https://platform.editor.naver.com/api/cafepc001/v2/material/broadcast"  # ?q=&count=20&pageToken=start
+SE_NEWS_DETAIL: Final = f"{SE_PLATFORM}/material/news/detail"   # ?oid=&aid=
+SE_VIDEO_TOKEN: Final = "https://platform.editor.naver.com/api/cafepc001/v2/video-uploader/token"
+UPAPI: Final = "https://upapi.cafe.naver.com/v1.0/cafes"
+SE_FILE_UPLOAD: Final = f"{UPAPI}/editor/files"         # multipart userId, file -> {fileId, fileName, fileSize}
+VOD_NEXUS: Final = "https://nexus.vod.naver.com"
+VOD_POSTMAN: Final = f"{VOD_NEXUS}/postman/api/v1/files"
+
+
+def poll_image_upload(cafe_id: int) -> str:
+    """투표 항목 사진 업로드 [실측 2026-11-24]"""
+    return f"{UPAPI}/{cafe_id}/images/poll"
+
+
+def vod_session(service_id: int | str, video_id: str) -> str:
+    return f"{VOD_NEXUS}/warp/{service_id}/upload/v4/{video_id}/sessions"
+
+
+def vod_cover(service_id: int | str, video_id: str) -> str:
+    return f"{VOD_NEXUS}/orbit/{service_id}/thumbnails/v2/cover/{video_id}"
 UPPHOTO: Final = "https://cafe.upphoto.naver.com"
 PHINF_DOMAIN: Final = "https://cafeptthumb-phinf.pstatic.net"
 

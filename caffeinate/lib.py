@@ -65,7 +65,7 @@ class Caffeinate:
     - boards   : 게시판 목록, 게시글 목록(페이지 / iter_articles), 공지
     - articles : 게시글 URL 해석, 상세, 글쓰기/수정/삭제 (images= 자동 업로드)
     - photos   : 이미지 업로드
-    - editor   : 스티커 목록, 링크 미리보기 (글 블록 재료)
+    - editor   : 스티커, 링크 미리보기·임베드, 장소·글감 검색, 파일·동영상·투표 사진 업로드, 수식 렌더링
     - comments : 댓글/대댓글 조회(page / all / iter), 작성, 삭제
     - likes    : 좋아요 상태/등록/취소, 누른 멤버
     - members  : 로그인 식별자, 가입 여부, 등급, 내 정보

@@ -21,6 +21,22 @@ class FontSize(StrEnum):
     FS38 = "fs38"
 
 
+class FontFamily(StrEnum):
+    """서체 nodeStyle.fontFamily - 카페 에디터 서체 목록 [실측 2026-11-24, 보기 화면 se-ff-<값>]
+    목록 밖 값도 저장되지만 CSS 가 없어 기본 서체로 보인다."""
+
+    SYSTEM = "system"                            # 기본서체
+    NANUM_GOTHIC = "nanumgothic"                 # 나눔고딕
+    NANUM_MYEONGJO = "nanummyeongjo"             # 나눔명조
+    NANUM_BARUN_GOTHIC = "nanumbarungothic"      # 나눔바른고딕
+    NANUM_SQUARE = "nanumsquare"                 # 나눔스퀘어
+    NANUM_SQUARE_NEO = "nanumsquareneo"          # 나눔스퀘어 네오
+    MARUBURI = "nanummaruburi"                   # 마루부리
+    DASI_SIJAGHAE = "nanumdasisijaghae"          # 다시시작해
+    BAREUN_HIPI = "nanumbareunhipi"              # 바른히피
+    URIDDAL_SONGEULSSI = "nanumuriddalsongeulssi"  # 우리딸손글씨
+
+
 class Align(StrEnum):
     """문단 정렬 paragraphStyle.align [실측: center -> se-text-paragraph-align-center]"""
 
@@ -85,3 +101,32 @@ class LinkCardLayout(StrEnum):
 class StickerFormat(StrEnum):
     NORMAL = "normal"
     ANIMATED = "animated"
+
+
+class VoteResultView(StrEnum):
+    """투표 결과 공개 시점 viewProperty.resultViewCondition [cafe 번들 2026-11-24]"""
+
+    AFTER_VOTE = "after_vote"    # 투표 참여 후 보기 (에디터 기본)
+    AFTER_CLOSE = "after_close"  # 투표 종료 후 보기
+    ALWAYS = "always"            # 항상 보기
+
+
+class VoteSort(StrEnum):
+    """투표 결과 항목 정렬 viewProperty.resultItemSortType [cafe 번들 2026-11-24]"""
+
+    ITEM_INDEX = "item_index"    # 항목 번호 순 (기본)
+    MOST_VOTED = "most_voted"    # 득표 많은 순
+
+
+class MaterialType(StrEnum):
+    """글감(material) 종류 - 카페 글감 검색 materialSet [cafe 번들 2026-11-24]"""
+
+    BOOK = "book"
+    MOVIE = "movie"
+    BROADCAST = "broadcast"
+    MUSIC = "music"
+    SHOPPING = "shopping"
+    NEWS = "news"
+    SHOW = "show"                # 공연·전시
+    SPORTS = "sports"
+    REALESTATE = "realestate"

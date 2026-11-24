@@ -38,3 +38,23 @@ def encode_multipart(
         out += f.data + b"\r\n"
     out += f"--{boundary}--\r\n".encode()
     return f"multipart/form-data; boundary={boundary}", bytes(out)
+
+
+def encode_parts(parts: list[FilePart | tuple[str, str]]) -> tuple[str, bytes]:
+    """필드·파일을 주어진 순서 그대로 -> (content-type, 본문). FormData.append 순서를 맞춰야 할 때"""
+    boundary = browser_boundary()
+    out = bytearray()
+    for p in parts:
+        if isinstance(p, FilePart):
+            filename = p.filename.replace('"', "%22").replace("\r", "%0D").replace("\n", "%0A")
+            out += (
+                f'--{boundary}\r\nContent-Disposition: form-data; name="{p.name}"; filename="{filename}"\r\n'
+                f"Content-Type: {p.content_type}\r\n\r\n"
+            ).encode()
+            out += p.data + b"\r\n"
+        else:
+            name, value = p
+            out += f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"\r\n\r\n'.encode()
+            out += value.encode("utf-8") + b"\r\n"
+    out += f"--{boundary}--\r\n".encode()
+    return f"multipart/form-data; boundary={boundary}", bytes(out)

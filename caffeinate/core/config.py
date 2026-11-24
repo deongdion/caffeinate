@@ -115,6 +115,11 @@ class Settings:
         return self.profile_dir / "login_firefox"
 
     @property
+    def editor_profile_dir(self) -> Path:
+        """수식 렌더링용 Camoufox 영구 프로필 (에디터 JS 캐시 - 준비 10s -> 3s 실측)"""
+        return self.profile_dir / "editor_firefox"
+
+    @property
     def browser_preset_file(self) -> Path:
         """PC별로 한 번 고른 Camoufox 기기 프리셋 (로그인 때마다 같은 기기로 보이게)"""
         return self.profile_dir / "camoufox_preset.json"

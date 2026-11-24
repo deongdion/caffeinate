@@ -175,6 +175,11 @@ async with await Caffeinate.login() as cafe:
 | `editor` | `sticker_packs(cafe, menu)` / `stickers(cafe, menu, pack)` | 스티커 묶음 (`StickerPack`) / 스티커 (`Sticker`) |
 | | `all_stickers(cafe, menu)` | 모든 묶음의 스티커 `{packCode: [Sticker]}` |
 | | `link_card(cafe, menu, url)` | 링크 미리보기 블록 (`LinkCard`, 서버 서명 포함) |
+| | `embed(cafe, menu, url)` | 외부 임베드 블록 (`Embed`, YouTube 등 oembed) |
+| | `places(cafe, menu, query)` | 장소 검색 -> `Place` 목록 (`Map` 재료) |
+| | `materials(cafe, menu, query, kinds=)` | 글감 검색 -> `Material` 목록 (책·영화·방송·음악·쇼핑·뉴스·공연전시·스포츠·부동산) |
+| | `upload_file` / `upload_video` / `upload_vote_image` | 파일·동영상·투표 사진 업로드 (보통은 작성 때 자동) |
+| | `render_formulas(cafe, menu, formulas)` | 수식 html·이미지 만들기 (headless Camoufox, 작성 때 자동, 같은 수식은 캐시) |
 
 ### 글 블록
 
@@ -208,8 +213,9 @@ await cafe.comments.add(ref, "", sticker_id=sticker)   # 댓글 스티커
 | 블록 | contentJson | 기본값 | 실측 (2026-11-24) |
 |---|---|---|---|
 | `Text(content)` | `text` | 줄마다 문단 | ✅ |
-| `Span(text, bold=, italic=, underline=, strike=, color=, background=, size=, link=)` | `textNode` + `nodeStyle` | 서식 없음 | ✅ 전부 렌더 |
-| `Paragraph(spans, align)` | `paragraph` | 정렬 없음 | ✅ |
+| `Span(text, bold=, italic=, underline=, strike=, color=, background=, size=, font=, link=)` | `textNode` + `nodeStyle` | 서식 없음 | ✅ 전부 렌더, 서체 10종 |
+| `Paragraph(spans, align, line_height)` | `paragraph` | 정렬·줄 간격 없음 | ✅ 양끝 정렬, 줄 간격 |
+| `ParagraphDefaults(style=, align=, line_height=)` | (직렬화 때 채움) | | ✅ 문서·블록 전체 기본 서식 |
 | `Heading(content)` | `sectionTitle` | | ✅ |
 | `Quote(content, source=, layout=)` | `quotation` | `DEFAULT` | ✅ 6가지 모양 |
 | `Divider(layout)` | `horizontalLine` | `DEFAULT` | ✅ 8가지 모양 |
@@ -224,7 +230,72 @@ await cafe.comments.add(ref, "", sticker_id=sticker)   # 댓글 스티커
 
 - **완전 커스텀**: 모든 블록에 `extra={...}` 를 주면 기본값을 덮어쓰거나 키를 더한다. `from_dict` 는 모르는 키를
   `extra` 에, 모르는 `@ctype` 은 `RawBlock` 에 담아서 `to_dict()` 가 받은 그대로 돌려준다. layout 은 enum 밖 문자열도 받는다.
-- 전용 블록이 없는 컴포넌트 (번들 스키마에는 있음): 동영상(`video`), 파일(`file`), 지도(`placesMap`), 일정(`schedule`), 수식(`formula`), 오디오(`audio`), 외부 임베드(`oembed`), 자료(`material`). 각각 별도 업로드·서명 API 가 필요해서 실측하지 않았다. 기존 글에서 읽은 것은 `RawBlock` 으로 그대로 다시 저장되지만, 새로 만드는 것은 보장하지 않는다.
+
+#### 서식 (웹 에디터와 같은 범위)
+
+카페 에디터 글자 툴바의 서식을 전부 코드로 줄 수 있다 [실측 2026-11-24: 툴바 목록 확인 → 저장 → 보기 화면 계산 스타일 확인].
+
+```python
+from caffeinate import Align, FontFamily, FontSize, ParagraphDefaults, TextStyle
+
+doc = Document([
+    Heading("소제목"),
+    Text([[Span("명조", font=FontFamily.NANUM_MYEONGJO), " 보통"],
+          Paragraph([Span("가운데 빨강 굵게", color="#e03131", bold=True)], Align.CENTER, line_height=2.1)],
+         defaults=ParagraphDefaults(style=TextStyle(size=FontSize.FS19), line_height=1.8)),   # 이 블록 전체
+    Quote("인용", source="출처"),
+], defaults=ParagraphDefaults(style=TextStyle(font=FontFamily.MARUBURI, color="#1971c2"),
+                              align=Align.JUSTIFY, line_height=1.6))                          # 글 전체
+```
+
+- 글자: 굵게·기울임·밑줄·취소선, 글자색·배경색 (`#rrggbb`/`rgb()` 아무 색), 크기 10단계 (`FontSize` 11~38),
+  서체 10종 (`FontFamily`: 기본서체·나눔고딕·나눔명조·나눔바른고딕·나눔스퀘어·나눔스퀘어 네오·마루부리·다시시작해·바른히피·우리딸손글씨), 링크.
+- 문단: 정렬 4가지 (`Align` 왼쪽·가운데·오른쪽·양끝), 줄 간격 (`1.6` = 160%. 에디터 메뉴는 1.5~2.1, 서버는 아무 양수나 `line-height` 로 넣는다).
+- 전체 기본 서식: `ParagraphDefaults` 를 `Document(defaults=)` (글 전체 본문·소제목·인용구) 나 `Text`/`Heading`/`Quote(defaults=)` (그 블록) 에 준다.
+  우선순위는 글자·문단에 직접 준 값 > 블록 기본 > 글 기본. 직렬화 때만 채우고 객체는 바꾸지 않는다.
+- spec 에서는 글자 `font`, 문단 `line_height`, 블록·문서 `defaults` (`{"font", "size", "color", ..., "align", "line_height"}`).
+- 서버 [실측]: 목록 밖 서체(`bogusfont`)도 저장되지만 CSS 가 없어 기본 서체로 보인다 (그래서 로컬에서 막는다. 꼭 필요하면 `extra`).
+  에디터 툴바의 "문단 서식" 메뉴는 본문/인용구 전환뿐이라 `Quote` 로 된다.
+
+#### 파일 · 동영상 · 지도 · 수식 · 글감 · 임베드 · 투표 · 일정
+
+카페 글쓰기 툴바의 나머지 버튼도 전부 블록이 있다. headless Camoufox 로 실제 에디터를 조작해 만든 컴포넌트와
+요청을 캡처하고, Python 으로 만든 블록을 저장해 글 보기 화면에서 그려지는 것까지 확인했다 (2026-11-24).
+
+```python
+from datetime import datetime
+from caffeinate import File, Formula, Map, Schedule, Video, Vote, VoteItem, VoteResultView
+
+places = await cafe.editor.places(cid, 1, "서울역")
+doc = Document([
+    File("보고서.pdf"),                                       # 작성 때 업로드 (50MB 까지)
+    Video("clip.mp4", title="제목", description="설명"),       # 작성 때 업로드 + 인코딩 대기
+    Map(places[:2]),                                           # 지도 이미지 주소는 에디터와 같게 만든다
+    Formula(r"\frac{-b \pm \sqrt{b^2-4ac}}{2a}"),             # 작성 때 네이버 수식 편집기로 렌더
+    Vote("점심", ["김밥", VoteItem("라면", image="ramen.png")], multiple=2, secret=False,
+         result_view=VoteResultView.ALWAYS, close_voters=10),  # 저장하면 서버가 투표를 만든다
+    Schedule("정기 모임", datetime(2026, 12, 1, 19), place=places[0]),   # 서버가 카페 일정을 만든다
+    await cafe.editor.embed(cid, 1, "https://www.youtube.com/watch?v=..."),
+    (await cafe.editor.materials(cid, 1, "해리포터", ["book"]))[0],
+])
+await cafe.articles.write(cid, 1, "제목", doc)
+```
+
+| 블록 | contentJson | 실측 (2026-11-24) |
+|---|---|---|
+| `File(source)` / `UploadedFile` | `file` | ✅ upapi `editor/files` 업로드 → `se-file` |
+| `Video(source, title=, description=, tags=)` / `UploadedVideo` | `video` | ✅ 토큰 → nexus 세션 → 5MB 조각 업로드 → 인코딩 대기 → 대표 장면. 9MB(조각 2개) 확인. 표시 크기는 문서 폭 800 으로 줄이고 재생 시간은 내림 (에디터와 같음) |
+| `Map(places)` / `Place` | `placesMap` | ✅ 1곳·여러 곳 지도 이미지 주소가 에디터와 같음 |
+| `Formula(latex, font_size=)` | `formula` | ✅ 글자 크기 11~38 (편집기에서 골라 렌더, 24 → 53×80 에디터와 같음). 수식 3개 렌더 41.3s → 13.2s (고정 기기 프리셋 + 영구 프로필 `editor_firefox` 의 번들 캐시 + 미리보기 대기). 보기 화면은 `html`(mathquill 마크업)을 그린다. `<img>` 는 글자로 나오고 MathML·`<script>` 는 저장 거부(20103)라 직접 만들지 않고 실제 수식 편집기를 돌린다. html·thumbnail 둘 다 필수 |
+| `Material` (`cafe.editor.materials`) | `material` | ✅ 9종 저장·렌더. 에디터 컨버터(날짜·쉼표·부동산 정규화·뉴스 상세 재조회·썸네일 크기 측정)를 그대로 옮김 |
+| `Embed` (`cafe.editor.embed`) | `oembed` | ✅ `/oglink` 의 oembed + oembedSign. 보기 화면에서 YouTube 플레이어 로드 확인 |
+| `Vote(title, items, ...)` / `VoteItem` | `custom` / `vote` | ✅ 저장 시 서버가 voteId·itemId 발급. 여러 개 선택·인원 종료·결과 공개·정렬·항목 사진 확인 |
+| `Schedule(title, start, end=, ...)` | `custom` / `schedule` | ✅ `uuid` 가 있어야 서버가 일정을 만든다 (자동). 하루 종일이면 서버가 시간대를 비우고 하루 경계로 맞춘다 (에디터도 같음) |
+
+- 작성 때 `cafe.editor.prepare()` 가 업로드·렌더링·`cafeId`/작성자 채우기를 하고 블록 객체를 결과로 바꾼다 (다시 넘기면 재업로드 안 함).
+- 카페에서 안 되는 것 [실측]: **오디오** (`audio-uploader/session-key` 가 406 `Audio Infra ServiceId Config fail : serviceId = cafe`).
+  **MYBOX** 사진·파일·동영상은 지원하지 않는다.
+- 서버 검증에 안 맞는 투표·일정 데이터나 모르는 `subtype` 은 `RawBlock` 으로 그대로 보존한다.
 - **로컬에서 막는 것** (`ValueError`/`TypeError`): 빈 문서, 업로드 안 된 `Image` 의 `to_dict()`, 형식이 틀린 색(`#rrggbb`·`rgb()`),
   목록 밖 글자 크기, http(s) 가 아닌 링크, 빈 표, 1 미만 `col_span`, 사진 1장짜리 묶음, 잘못된 스티커.
 - **서버 동작** [실측]: 모르는 `@ctype`·id 없는 컴포넌트·외부 주소 사진 → 500 (99999), 없는 스티커 → 500 (31021),
@@ -435,8 +506,8 @@ except PermissionDeniedError as e:
 ```
 caffeinate/
 ├── lib.py          Caffeinate 클라이언트 (서비스들을 묶음)
-├── services/       기능별 API: cafes · boards · articles · comments · likes · members · photos
-├── models/         응답 데이터 클래스 (Article, Comment, LikeStatus ...)
+├── services/       기능별 API: cafes · boards · articles · comments · likes · members · photos · editor
+├── models/         데이터 클래스 (Article, Comment ... / 글 블록 blocks·media / spec)
 ├── core/           요청 처리의 핵심
 │   ├── session.py      HTTP 세션 (재시도, 리다이렉트, 요청 간격)
 │   ├── headers.py      파이어폭스와 같은 헤더 구성
@@ -491,6 +562,9 @@ mypy caffeinate
 - 카페 만들기 `cafes.create()` (아이콘 업로드, 음성 캡차 OCR 자동 풀이, 입력 검증)
 - `Cafe.is_manager` (homepc `manageCafe`)
 - 글 블록: `Document`, `Text`, `Span`, `Heading`, `Quote`, `Divider`, `Code`, `Table`, `Image`, `ImageGroup`, `ImageStrip`, `Sticker`, `LinkCard`, `RawBlock` (to_dict/from_dict)
+- 서식: `Span(font=)`/`TextStyle.font` (`FontFamily` 10종), `Paragraph(line_height=)`, `ParagraphDefaults` (글·블록 전체 기본 서식)
+- 글 블록 추가: `File`, `Video`, `Map`/`Place`, `Formula`, `Material`, `Embed`, `Vote`/`VoteItem`, `Schedule` (spec·스키마·채우기 포함)
+- `cafe.editor`: `places`, `materials`, `embed`, `upload_file`, `upload_video`, `upload_vote_image`, `render_formulas`, `prepare`
 - `cafe.editor` (`StickerPack`, 스티커, 링크 미리보기), `Comment.sticker`
 - 댓글 블록: `comments.add/reply` 가 블록 목록·`CommentDraft` 를 받음 (글 + 스티커 + 사진, 6000바이트 검사)
 - spec·JSON Schema: `Document.to_spec/from_spec/json_schema/fill_schema/fill`, 블록 `hint`, `CommentDraft.json_schema`, `SpecError`

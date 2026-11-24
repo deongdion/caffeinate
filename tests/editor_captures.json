@@ -1,0 +1,182 @@
+{
+ "file": {
+  "id": "SE-00000000-0000-0000-0000-000000000000",
+  "layout": "default",
+  "fileId": "02e291f6-e7d1-11f1-886c-0050569e9deb",
+  "fileName": "sample.txt",
+  "fileSize": 22,
+  "@ctype": "file"
+ },
+ "placesMap": {
+  "id": "SE-00000000-0000-0000-0000-000000000000",
+  "layout": "default",
+  "searchEngine": "naver",
+  "thumbnail": {
+   "src": "https://simg.pstatic.net/static.map/v2/map/staticmap.bin?caller=smarteditor&markers=pos%3A126.9707021%2037.554073%7Csize%3Amid%7Ccolor%3A0x11cc73%7Ctype%3Ad%7CviewSizeRatio%3A0.7&w=620&h=200&scale=2&dataversion=179.470",
+   "@ctype": "thumbnail"
+  },
+  "places": [
+   {
+    "placeId": "11630456",
+    "name": "서울역 (고속철도)",
+    "address": "서울특별시 용산구 한강대로 405",
+    "latlng": {
+     "latitude": 37.554073,
+     "longitude": 126.9707021,
+     "@ctype": "position"
+    },
+    "searchType": "s",
+    "tel": "1588-7788",
+    "@ctype": "place"
+   }
+  ],
+  "@ctype": "placesMap"
+ },
+ "vote": {
+  "id": "SE-00000000-0000-0000-0000-000000000000",
+  "align": null,
+  "subtype": "vote",
+  "layout": "default",
+  "data": {
+   "cafeId": 31822728,
+   "closeCondition": "none",
+   "closeConditionEndTime": null,
+   "closeConditionVoterCount": null,
+   "items": [
+    {
+     "itemId": null,
+     "itemOrder": 1,
+     "itemName": "사과",
+     "votedByMe": false
+    },
+    {
+     "itemId": null,
+     "itemOrder": 2,
+     "itemName": "배",
+     "votedByMe": false
+    },
+    {
+     "itemId": null,
+     "itemOrder": 3,
+     "itemName": "감",
+     "votedByMe": false
+    }
+   ],
+   "selectableCount": 1,
+   "viewProperty": {
+    "resultItemSortType": "item_index",
+    "showVoterChoice": false,
+    "resultViewCondition": "after_vote"
+   },
+   "voteName": "실측 투표",
+   "voteWriterId": "user1",
+   "voterCount": 0,
+   "isSecret": true
+  },
+  "@ctype": "custom"
+ },
+ "schedule": {
+  "id": "SE-00000000-0000-0000-0000-000000000000",
+  "align": null,
+  "subtype": "schedule",
+  "layout": "default",
+  "data": {
+   "cafeId": 31822728,
+   "content": "실측 일정",
+   "startDateTimeStamp": 1795503600390,
+   "endDateTimeStamp": 1795507200390,
+   "timeZoneId": "Asia/Seoul",
+   "timeZone": {
+    "countryCode": "KR",
+    "countryName": "대한민국",
+    "cityId": "260",
+    "cityName": "서울",
+    "timeZoneId": "Asia/Seoul",
+    "gmtString": "GMT+09:00",
+    "offsetMinute": 540
+   },
+   "allDay": false,
+   "priority": false,
+   "location": "서울역",
+   "scrap": false,
+   "deleted": false
+  },
+  "@ctype": "custom"
+ },
+ "video": {
+  "id": "SE-00000000-0000-0000-0000-000000000000",
+  "layout": "default",
+  "contentMode": "normal",
+  "fileSize": 66146,
+  "playTime": 4,
+  "internalResource": true,
+  "thumbnail": {
+   "src": "https://phinf.pstatic.net/image.nmv/cafe_2026_11_24_452/tNaui4MVtp_01.jpg",
+   "@ctype": "thumbnail"
+  },
+  "originalWidth": 640,
+  "originalHeight": 360,
+  "width": 640,
+  "height": 360,
+  "caption": null,
+  "format": "normal",
+  "represent": true,
+  "vid": "03029F70BD3800D0A6AC57AA820458275CD7",
+  "mediaMeta": {
+   "tags": [],
+   "@ctype": "mediaMeta"
+  },
+  "videoInfraServiceId": "5",
+  "origin": {
+   "srcFrom": "local",
+   "@ctype": "videoOrigin"
+  },
+  "ai": false,
+  "@ctype": "video"
+ },
+ "material": {
+  "id": "SE-00000000-0000-0000-0000-000000000000",
+  "layout": "material_basic",
+  "type": "book",
+  "title": "해리 포터와 마법사의 돌 1",
+  "link": "https://search.shopping.naver.com/book/product/pwtAnLb%2Bk%2FOMDiHNL3ICldkTton6OW7CwZW0Porpy2Q%3D",
+  "detailInfo": [
+   {
+    "label": "저자",
+    "labelName": "author",
+    "values": [
+     {
+      "value": "조앤 K. 롤링",
+      "@ctype": "value"
+     }
+    ],
+    "@ctype": "item"
+   }
+  ],
+  "dataId": "51182815714",
+  "thumbnail": {
+   "src": "https://shopping-phinf.pstatic.net/main_5118281/51182815714.20260331102756.jpg",
+   "width": 458,
+   "height": 652,
+   "@ctype": "thumbnail"
+  },
+  "volScs": "1",
+  "sign": "yl-rvaxlxeQMUJfDnFxt7CW0jLe5nLiBcVGC24dTeKo__v1.0",
+  "@ctype": "material"
+ },
+ "formula": {
+  "id": "SE-00000000-0000-0000-0000-000000000000",
+  "layout": "default",
+  "latex": "x^2+1",
+  "html": "<div style=\"font-size: 15px;\" class=\"lama-viewer\"><div class=\"mq-math-mode-wrapper\"><div style=\"display: block;\" class=\"mq-math-mode\"><span class=\"mq-root-block\"><var>x</var><span class=\"mq-supsub mq-non-leaf mq-sup-only\"><span class=\"mq-sup\"><span>2</span></span></span><span class=\"mq-binary-operator\">+</span><span>1</span></span></div></div></div>",
+  "thumbnail": {
+   "src": "https://cafeptthumb-phinf.pstatic.net/MjAyNjExMjRfODIg/MDAxNzk1NTAyNzYxMjU0.vBZB1HeqqofjBi8vJCGHKIvCvKRoE0VPdoAvHMw2048g.l_viwoJC6UDjctRH13x_cQxCQTc_0Ks4FWUO8JDkdIIg.PNG/image.png",
+   "width": 183,
+   "height": 61,
+   "@ctype": "thumbnail"
+  },
+  "fontSizeCode": "fs15",
+  "fontFamily": "system",
+  "@ctype": "formula"
+ }
+}

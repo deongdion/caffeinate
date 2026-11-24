@@ -4,6 +4,7 @@
 images 에는 UploadedImage / bytes / 파일 경로 / (bytes, 파일명) 을 섞어 넘길 수 있다 (photos.upload_many 로 자동 업로드).
 삭제 [실측 2026-11-13]: cafe-mobile/ArticleDelete.json (브라우저 캡처).
 """
+import dataclasses
 from collections.abc import Sequence
 from typing import Any, TypeAlias
 
@@ -140,9 +141,14 @@ class ArticleService(BaseService):
     async def content_json(
         self, cafe_id: CafeLike, menu_id: int, body: Body, images: Sequence[ImageLike] | None = None
     ) -> str:
-        """본문 입력 -> contentJson 문자열 (블록 안/뒤 사진은 올리지 않은 것만 업로드, 순서 유지)"""
+        """본문 입력 -> contentJson 문자열
+
+        올리지 않은 사진·파일·동영상·투표 사진을 업로드하고, 수식을 렌더링하고, 투표·일정에 cafeId 등을 채운다
+        (cafe.editor.prepare). 블록 객체는 업로드 결과로 바뀐다 (다시 넘기면 재업로드 안 함).
+        """
         doc = document_of(body)
         cid = await self._cafe_id(cafe_id)
+        await self._client.editor.prepare(cid, menu_id, doc)
         uploaded = await self._images(cid, menu_id, images)
         if uploaded:
             doc.blocks.extend(Image(u) for u in uploaded)
@@ -188,8 +194,7 @@ class ArticleService(BaseService):
 def document_of(body: Body) -> Document:
     """본문 입력 -> Document (원본 Document 는 바꾸지 않도록 블록 목록을 복사)"""
     if isinstance(body, Document):
-        return Document(list(body.blocks), id=body.id, version=body.version, theme=body.theme,
-                        language=body.language, extra=dict(body.extra))
+        return dataclasses.replace(body, blocks=list(body.blocks), extra=dict(body.extra))   # 모든 필드 유지
     if isinstance(body, str):
         return Document([Text(body)] if body else [])
     if isinstance(body, Block):

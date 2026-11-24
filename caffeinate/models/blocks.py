@@ -33,6 +33,7 @@ from typing import Any, ClassVar, Self, TypeAlias
 from ..enums.editor import (
     Align,
     CodeLayout,
+    FontFamily,
     FontSize,
     ImageGroupLayout,
     LineLayout,
@@ -49,6 +50,13 @@ JSONDict: TypeAlias = dict[str, Any]
 STICKER_DOMAIN = "https://storep-phinf.pstatic.net"
 _COLOR_RE = re.compile(r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$|^rgba?\(\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*\d{1,3}\s*(?:,\s*[\d.]+\s*)?\)$")
 _FONT_SIZES = frozenset(f.value for f in FontSize)
+_FONT_FAMILIES = frozenset(f.value for f in FontFamily)
+
+
+def _check_line_height(v: float | None) -> None:
+    # 에디터 메뉴는 1.5~2.1 이지만 서버는 아무 양수나 line-height 로 넣는다 [실측 2026-11-24: 0.5, 1.75, 3]
+    if v is not None and (isinstance(v, bool) or not isinstance(v, int | float) or v <= 0):
+        raise ValueError(f"줄 간격은 양수여야 합니다 (1.6 = 160%): {v!r}")
 
 
 def _s(v: Any) -> str:
@@ -86,6 +94,7 @@ class TextStyle:
     color: str | None = None                   # fontColor "#ff0000"
     background: str | None = None              # backgroundColor
     size: FontSize | str | None = None         # fontSizeCode
+    font: FontFamily | str | None = None       # fontFamily (보기 화면 se-ff-<값>)
     extra: JSONDict = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -93,10 +102,12 @@ class TextStyle:
         _check_color("background", self.background)
         if self.size is not None and _s(self.size) not in _FONT_SIZES:
             raise ValueError(f"글자 크기는 {sorted(_FONT_SIZES)} 중 하나입니다: {self.size!r}")
+        if self.font is not None and _s(self.font) not in _FONT_FAMILIES:
+            raise ValueError(f"서체는 {sorted(_FONT_FAMILIES)} 중 하나입니다 (목록 밖은 extra 로): {self.font!r}")
 
     def is_empty(self) -> bool:
         return not (self.bold or self.italic or self.underline or self.strike or self.color or self.background
-                    or self.size or self.extra)
+                    or self.size or self.font or self.extra)
 
     def to_dict(self) -> JSONDict:
         d: JSONDict = {}
@@ -110,6 +121,8 @@ class TextStyle:
             d["backgroundColor"] = self.background
         if self.size:
             d["fontSizeCode"] = _s(self.size)
+        if self.font:
+            d["fontFamily"] = _s(self.font)
         d.update(self.extra)
         d[CTYPE] = "nodeStyle"
         return d
@@ -118,13 +131,17 @@ class TextStyle:
     def from_dict(cls, d: Any) -> Self:
         d = as_dict(d)
         size = d.get("fontSizeCode")
+        font = d.get("fontFamily")
         return cls(
             bold=bool(d.get("bold")), italic=bool(d.get("italic")), underline=bool(d.get("underline")),
             strike=bool(d.get("strikeThrough")), color=d.get("fontColor") or None,
             background=d.get("backgroundColor") or None,
             size=FontSize(size) if size in _FONT_SIZES else None,
+            font=FontFamily(font) if font in _FONT_FAMILIES else None,
             extra=_split(d, ("bold", "italic", "underline", "strikeThrough", "fontColor", "backgroundColor",
-                             "fontSizeCode")) | ({"fontSizeCode": size} if size and size not in _FONT_SIZES else {}),
+                             "fontSizeCode", "fontFamily"))
+            | ({"fontSizeCode": size} if size and size not in _FONT_SIZES else {})
+            | ({"fontFamily": font} if font and font not in _FONT_FAMILIES else {}),
         )
 
 
@@ -133,6 +150,7 @@ class Span:
     """글자 조각 (textNode). 서식은 style= 또는 bold=/color= 같은 단축 인자로
 
         Span("굵게", bold=True), Span("빨강", color="#ff0000", size=FontSize.FS24), Span("링크", link="https://...")
+        Span("명조", font=FontFamily.NANUM_MYEONGJO)
     """
 
     text: str
@@ -145,6 +163,7 @@ class Span:
     color: str | None = None
     background: str | None = None
     size: FontSize | str | None = None
+    font: FontFamily | str | None = None
     id: str = field(default_factory=se_id, kw_only=True)
     extra: JSONDict = field(default_factory=dict, kw_only=True)
 
@@ -152,15 +171,17 @@ class Span:
         if not isinstance(self.text, str):
             raise TypeError(f"Span.text 는 str 이어야 합니다: {type(self.text).__name__}")
         _check_link(self.link)
-        if self.bold or self.italic or self.underline or self.strike or self.color or self.background or self.size:
+        if (self.bold or self.italic or self.underline or self.strike or self.color or self.background or self.size
+                or self.font):
             b = self.style or TextStyle()
             self.style = TextStyle(
                 bold=self.bold or b.bold, italic=self.italic or b.italic, underline=self.underline or b.underline,
                 strike=self.strike or b.strike, color=self.color or b.color,
-                background=self.background or b.background, size=self.size or b.size, extra=dict(b.extra),
+                background=self.background or b.background, size=self.size or b.size, font=self.font or b.font,
+                extra=dict(b.extra),
             )
             self.bold = self.italic = self.underline = self.strike = False
-            self.color = self.background = self.size = None
+            self.color = self.background = self.size = self.font = None
 
     def to_dict(self) -> JSONDict:
         d: JSONDict = {"id": self.id, "value": self.text}
@@ -185,14 +206,16 @@ class Span:
 
 @dataclass(slots=True)
 class Paragraph:
-    """문단 (paragraph) - 글자 조각 목록 + 정렬"""
+    """문단 (paragraph) - 글자 조각 목록 + 정렬 + 줄 간격 (1.6 = 160%)"""
 
     spans: list[Span] = field(default_factory=list)
     align: Align | str | None = None
+    line_height: float | None = None           # paragraphStyle.lineHeight [실측 200% -> 2]
     id: str = field(default_factory=se_id, kw_only=True)
     extra: JSONDict = field(default_factory=dict, kw_only=True)
 
     def __post_init__(self) -> None:
+        _check_line_height(self.line_height)
         self.spans = [s if isinstance(s, Span) else Span(str(s)) for s in self.spans]
         if not self.spans:
             self.spans = [Span("")]  # 빈 줄 = 값이 "" 인 textNode 하나 [실측 2026-11-13]
@@ -203,8 +226,13 @@ class Paragraph:
 
     def to_dict(self) -> JSONDict:
         d: JSONDict = {"id": self.id, "nodes": [s.to_dict() for s in self.spans]}
+        style: JSONDict = {}
         if self.align:
-            d["style"] = {"align": _s(self.align), CTYPE: "paragraphStyle"}
+            style["align"] = _s(self.align)
+        if self.line_height is not None:
+            style["lineHeight"] = self.line_height
+        if style:
+            d["style"] = style | {CTYPE: "paragraphStyle"}
         d.update(self.extra)
         d[CTYPE] = "paragraph"
         return d
@@ -214,12 +242,77 @@ class Paragraph:
         d = as_dict(d)
         style = as_dict(d.get("style"))
         extra = _split(d, ("id", "nodes", "style"))
-        if set(style) - {"align", CTYPE}:
-            extra["style"] = style  # 정렬 말고도 들어 있으면 원본 그대로 보존
+        lh = style.get("lineHeight")
+        if set(style) - {"align", "lineHeight", CTYPE} or (lh is not None and (
+                isinstance(lh, bool) or not isinstance(lh, int | float) or lh <= 0)):
+            extra["style"], style = style, {}  # 모르는 키나 이상한 값이 있으면 원본 그대로 보존
         align = style.get("align")
+        lh = style.get("lineHeight")
         return cls([Span.from_dict(n) for n in as_list(d.get("nodes"))],
-                   _enum_or_str(Align, align) if align else None,
+                   _enum_or_str(Align, align) if align else None, lh,
                    id=str(d.get("id") or se_id()), extra=extra)
+
+
+@dataclass(slots=True, kw_only=True)
+class ParagraphDefaults:
+    """여러 문단에 한꺼번에 주는 기본 서식 (Text/Heading/Quote 의 defaults=, Document 의 defaults=)
+
+    문단·글자에 직접 준 값이 이긴다 (글자 > 블록 > 문서). 직렬화 때만 채우고 객체는 바꾸지 않는다.
+        Document([...], defaults=ParagraphDefaults(style=TextStyle(font=FontFamily.NANUM_SQUARE), line_height=1.8))
+    """
+
+    style: TextStyle | None = None
+    align: Align | str | None = None
+    line_height: float | None = None
+
+    def __post_init__(self) -> None:
+        _check_line_height(self.line_height)
+
+    def is_empty(self) -> bool:
+        return (self.style is None or self.style.is_empty()) and not self.align and self.line_height is None
+
+    def apply(self, paragraphs: list[JSONDict]) -> list[JSONDict]:
+        """문단 dict 목록에 없는 키만 채운다 (in-place, 같은 목록 반환)"""
+        node: JSONDict = {}
+        if self.style is not None and not self.style.is_empty():
+            node = {k: v for k, v in self.style.to_dict().items() if k != CTYPE}
+        para: JSONDict = {}
+        if self.align:
+            para["align"] = _s(self.align)
+        if self.line_height is not None:
+            para["lineHeight"] = self.line_height
+        for p in paragraphs:
+            if para:
+                st = as_dict(p.get("style"))
+                p["style"] = para | {k: v for k, v in st.items() if k != CTYPE} | {CTYPE: "paragraphStyle"}
+            if node:
+                for n in as_list(p.get("nodes")):
+                    if isinstance(n, dict):
+                        st = as_dict(n.get("style"))
+                        n["style"] = node | {k: v for k, v in st.items() if k != CTYPE} | {CTYPE: "nodeStyle"}
+        return paragraphs
+
+    def to_dict(self) -> JSONDict:
+        d: JSONDict = {}
+        if self.style is not None and not self.style.is_empty():
+            d["style"] = self.style.to_dict()
+        if self.align:
+            d["align"] = _s(self.align)
+        if self.line_height is not None:
+            d["lineHeight"] = self.line_height
+        return d
+
+    @classmethod
+    def from_dict(cls, d: Any) -> Self:
+        d = as_dict(d)
+        align = d.get("align")
+        return cls(style=TextStyle.from_dict(d["style"]) if isinstance(d.get("style"), dict) else None,
+                   align=_enum_or_str(Align, align) if align else None, line_height=d.get("lineHeight"))
+
+
+def _paras(ps: Sequence[Paragraph], defaults: "ParagraphDefaults | None") -> list[JSONDict]:
+    out = [p.to_dict() for p in ps]
+    return defaults.apply(out) if defaults is not None and not defaults.is_empty() else out
 
 
 TextLike: TypeAlias = "str | Span | Paragraph | Sequence[str | Span | Paragraph | Sequence[str | Span]]"
@@ -298,6 +391,10 @@ class Block:
     def images(self) -> Iterator["Image"]:
         return iter(())
 
+    def media(self) -> Iterator[Any]:
+        """대표(represent) 후보 - 사진, 동영상 (문서 순서)"""
+        return self.images()
+
 
 @dataclass(slots=True)
 class RawBlock(Block):
@@ -328,6 +425,7 @@ class Text(Block):
     CTYPE: ClassVar[str] = "text"
     content: Any = ""
     layout: str = "default"
+    defaults: ParagraphDefaults | None = field(default=None, kw_only=True)   # 이 블록 모든 문단의 기본 서식
 
     def __post_init__(self) -> None:
         self.content = paragraphs(self.content)
@@ -337,7 +435,7 @@ class Text(Block):
         return list(self.content)
 
     def _body(self) -> JSONDict:
-        return {"layout": _s(self.layout), "value": [p.to_dict() for p in self.content]}
+        return {"layout": _s(self.layout), "value": _paras(self.content, self.defaults)}
 
     @classmethod
     def _parse(cls, d: JSONDict) -> "Text":
@@ -355,12 +453,13 @@ class Heading(Block):
     CTYPE: ClassVar[str] = "sectionTitle"
     content: Any = ""
     layout: str = "default"
+    defaults: ParagraphDefaults | None = field(default=None, kw_only=True)
 
     def __post_init__(self) -> None:
         self.content = paragraphs(self.content)
 
     def _body(self) -> JSONDict:
-        return {"layout": _s(self.layout), "title": [p.to_dict() for p in self.content]}
+        return {"layout": _s(self.layout), "title": _paras(self.content, self.defaults)}
 
     @classmethod
     def _parse(cls, d: JSONDict) -> "Heading":
@@ -376,15 +475,16 @@ class Quote(Block):
     content: Any = ""
     source: Any = None
     layout: QuotationLayout | str = QuotationLayout.DEFAULT
+    defaults: ParagraphDefaults | None = field(default=None, kw_only=True)
 
     def __post_init__(self) -> None:
         self.content = paragraphs(self.content)
         self.source = paragraphs(self.source) if self.source is not None else None
 
     def _body(self) -> JSONDict:
-        d: JSONDict = {"layout": _s(self.layout), "value": [p.to_dict() for p in self.content]}
+        d: JSONDict = {"layout": _s(self.layout), "value": _paras(self.content, self.defaults)}
         if self.source:
-            d["source"] = [p.to_dict() for p in self.source]
+            d["source"] = _paras(self.source, self.defaults)
         return d
 
     @classmethod
@@ -863,6 +963,9 @@ def _enum_or_str(enum: type[Enum], value: Any) -> Any:
 # ---------------------------------------------------------------- 문서
 
 
+_PARAGRAPH_KEYS = {"text": ("value",), "sectionTitle": ("title",), "quotation": ("value", "source")}
+
+
 @dataclass(slots=True)
 class Document:
     """글 본문 전체 (SmartEditor document). blocks 에 str 을 넣으면 Text 블록이 된다"""
@@ -872,6 +975,7 @@ class Document:
     version: str = field(default=SE_VERSION, kw_only=True)
     theme: str = field(default="default", kw_only=True)
     language: str = field(default="ko-KR", kw_only=True)
+    defaults: ParagraphDefaults | None = field(default=None, kw_only=True)   # 글 전체 글자·문단 기본 서식
     extra: JSONDict = field(default_factory=dict, kw_only=True)
 
     def __post_init__(self) -> None:
@@ -909,15 +1013,20 @@ class Document:
     def to_dict(self) -> JSONDict:
         if not self.blocks:
             raise ValueError("빈 문서입니다 (블록이 하나 이상 있어야 합니다)")
-        imgs = self.images()
-        auto = imgs[0] if imgs and not any(i.represent for i in imgs) else None
+        media = [m for b in self.blocks for m in b.media()]
+        auto = media[0] if media and not any(m.represent for m in media) else None
         if auto is not None:
-            auto.represent = True  # 첫 사진이 대표 사진 (직렬화하는 동안만 - 사용자 객체는 그대로 둔다)
+            auto.represent = True  # 첫 사진/동영상이 대표 (직렬화하는 동안만 - 사용자 객체는 그대로 둔다)
         try:
             components = [b.to_dict() for b in self.blocks]
         finally:
             if auto is not None:
                 auto.represent = None
+        if self.defaults is not None and not self.defaults.is_empty():
+            for c in components:   # 본문·소제목·인용구 문단 (블록·문단에 직접 준 값이 이긴다)
+                for key in _PARAGRAPH_KEYS.get(c.get(CTYPE), ()):
+                    if isinstance(c.get(key), list):
+                        self.defaults.apply(c[key])
         doc: JSONDict = {"version": self.version, "theme": self.theme, "language": self.language, "id": self.id,
                          "di": {"dif": False, "dio": self._dio()}, "components": components}
         doc.update(self.extra)

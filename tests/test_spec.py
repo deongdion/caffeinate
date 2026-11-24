@@ -66,7 +66,7 @@ def test_plain_text_spec_is_string() -> None:
     assert to_spec(Divider()) == {"type": "divider", "layout": "default"}
 
 
-@pytest.mark.parametrize("block", _rich_doc().blocks + [RawBlock({"@ctype": "placesMap", "x": 1})])
+@pytest.mark.parametrize("block", _rich_doc().blocks + [RawBlock({"@ctype": "audio", "x": 1})])
 def test_spec_roundtrip(block: Block) -> None:
     spec = to_spec(block)
     again = from_spec(json.loads(json.dumps(spec)))   # JSON 을 거쳐도 같다
@@ -278,3 +278,28 @@ def test_comment_schema_and_spec() -> None:
     with pytest.raises(ValueError):
         CommentDraft.from_spec({"other": 1})
     assert CommentDraft.from_spec({"text": "x", "sticker": ""}).sticker is None
+
+
+def test_spec_font_line_height_and_defaults_roundtrip() -> None:
+    from caffeinate import FontFamily, ParagraphDefaults, TextStyle
+
+    spec = {"defaults": {"font": "nanumsquare", "line_height": 1.8, "align": "justify"},
+            "blocks": [{"type": "text", "defaults": {"color": "#333333"},
+                        "content": [{"spans": [{"text": "명조", "font": "nanummyeongjo"}], "line_height": 2}]},
+                       {"type": "quote", "content": "q", "defaults": {"font": "nanummaruburi"}}]}
+    doc = Document.from_spec(spec)
+    assert doc.defaults == ParagraphDefaults(style=TextStyle(font=FontFamily.NANUM_SQUARE), align="justify",
+                                             line_height=1.8)
+    assert doc.to_spec()["defaults"] == spec["defaults"]
+    assert doc.to_spec()["blocks"][0]["defaults"] == {"color": "#333333"}
+    def no_ids(x: object) -> object:
+        if isinstance(x, dict):
+            return {k: no_ids(v) for k, v in x.items() if k != "id"}
+        return [no_ids(v) for v in x] if isinstance(x, list) else x
+
+    assert no_ids(Document.from_spec(doc.to_spec()).to_dict()["document"]["components"]) == \
+        no_ids(doc.to_dict()["document"]["components"])
+    jsonschema = pytest.importorskip("jsonschema")
+    jsonschema.validate(spec, Document.json_schema())
+    with pytest.raises(SpecError):
+        Document.from_spec({"defaults": {"font": "comic"}, "blocks": ["x"]})

@@ -1,3 +1,5 @@
+import sys
+
 """models/blocks.py - 글쓰기 블록 dataclass, to_dict/from_dict, 예외 [실측 2026-11-24 형식 기준]"""
 import json
 from typing import Any
@@ -12,6 +14,7 @@ from caffeinate import (
     CodeLayout,
     Divider,
     Document,
+    FontFamily,
     FontSize,
     Heading,
     Image,
@@ -21,6 +24,7 @@ from caffeinate import (
     LineLayout,
     LinkCard,
     Paragraph,
+    ParagraphDefaults,
     QuotationLayout,
     Quote,
     RawBlock,
@@ -32,7 +36,6 @@ from caffeinate import (
     UploadedImage,
     paragraphs,
 )
-from caffeinate.models import blocks as blocks_mod
 from caffeinate.services.articles import document_of
 from caffeinate.services.comments import _sticker_id
 from caffeinate.utils.editor import build_content_json
@@ -233,7 +236,7 @@ def test_link_card_from_api() -> None:
     ImageStrip([_img("1"), _img("2")]),
     Sticker("cafe_001", 1, 185, 160, animated=True),
     LinkCard("https://a.com", title="t", sign="s"),
-    RawBlock({"@ctype": "placesMap", "layout": "default", "places": [{"name": "x"}]}),
+    RawBlock({"@ctype": "audio", "layout": "default", "audioId": "x"}),
 ])
 def test_roundtrip(block: Block) -> None:
     _roundtrip(block)
@@ -270,7 +273,7 @@ def test_typed_from_dict_checks_ctype() -> None:
 
 def test_registry_holds_final_classes() -> None:
     for ctype, cls in Block._REGISTRY.items():
-        assert getattr(blocks_mod, cls.__name__) is cls, ctype
+        assert getattr(sys.modules[cls.__module__], cls.__name__) is cls, ctype
 
 
 def test_style_extra_and_unknown_font_size_preserved() -> None:
@@ -456,3 +459,58 @@ def test_document_to_dict_does_not_mutate_represent() -> None:
     c = Image(_img("3"), represent=True)
     d2 = Document([a, c]).to_dict()["document"]["components"]
     assert [x["represent"] for x in d2] == [False, True]
+
+
+# ---------------------------------------------------------------- 서체 · 줄 간격 · 기본 서식
+
+
+def test_font_family_and_line_height_like_editor() -> None:
+    # 에디터 캡처 [2026-11-24]: 서체 = nodeStyle.fontFamily, 줄 간격 200% = paragraphStyle.lineHeight 2
+    p = Paragraph([Span("서식 테스트 문장", font=FontFamily.NANUM_MYEONGJO)], Align.JUSTIFY, 2)
+    d = p.to_dict()
+    assert d["nodes"][0]["style"] == {"fontFamily": "nanummyeongjo", "@ctype": "nodeStyle"}
+    assert d["style"] == {"align": "justify", "lineHeight": 2, "@ctype": "paragraphStyle"}
+    back = Paragraph.from_dict(d)
+    assert back.line_height == 2 and back.spans[0].style.font is FontFamily.NANUM_MYEONGJO
+    assert back.to_dict() == d
+
+
+def test_font_family_validation_and_unknown_preserved() -> None:
+    with pytest.raises(ValueError, match="서체"):
+        Span("x", font="comic")
+    with pytest.raises(ValueError, match="줄 간격"):
+        Paragraph(["x"], line_height=0)
+    s = Span.from_dict({"value": "x", "style": {"fontFamily": "bogus", "@ctype": "nodeStyle"}, "@ctype": "textNode"})
+    assert s.style.font is None and s.to_dict()["style"]["fontFamily"] == "bogus"
+    p = Paragraph.from_dict({"nodes": [], "style": {"lineHeight": "big", "@ctype": "paragraphStyle"},
+                             "@ctype": "paragraph"})
+    assert p.line_height is None and p.to_dict()["style"]["lineHeight"] == "big"
+
+
+def test_defaults_priority_span_over_block_over_document() -> None:
+    doc = Document([
+        Text(["a", [Span("b", font=FontFamily.NANUM_GOTHIC, color="#ff0000")],
+              Paragraph(["c"], Align.RIGHT, 1.5)],
+             defaults=ParagraphDefaults(style=TextStyle(font=FontFamily.NANUM_SQUARE), line_height=1.8)),
+        Heading("h"),
+        Quote("q", source="s"),
+    ], defaults=ParagraphDefaults(style=TextStyle(font=FontFamily.MARUBURI, color="#333333"),
+                                  align=Align.JUSTIFY, line_height=2))
+    comps = doc.to_dict()["document"]["components"]
+    a, b, c = comps[0]["value"]
+    assert a["nodes"][0]["style"] == {"fontFamily": "nanumsquare", "fontColor": "#333333", "@ctype": "nodeStyle"}
+    assert a["style"] == {"align": "justify", "lineHeight": 1.8, "@ctype": "paragraphStyle"}
+    assert b["nodes"][0]["style"]["fontFamily"] == "nanumgothic" and b["nodes"][0]["style"]["fontColor"] == "#ff0000"
+    assert c["style"]["align"] == "right" and c["style"]["lineHeight"] == 1.5
+    assert comps[1]["title"][0]["nodes"][0]["style"]["fontFamily"] == "nanummaruburi"
+    assert comps[2]["source"][0]["style"]["lineHeight"] == 2
+    # 객체는 바뀌지 않는다
+    assert doc.blocks[1].content[0].spans[0].style is None
+    assert Document.from_dict(doc.to_dict()).to_dict()["document"]["components"] == comps
+
+
+def test_document_of_keeps_defaults() -> None:
+    doc = Document(["a"], defaults=ParagraphDefaults(line_height=2))
+    out = document_of(doc)
+    assert out is not doc and out.defaults == doc.defaults
+    assert out.to_dict()["document"]["components"][0]["value"][0]["style"]["lineHeight"] == 2

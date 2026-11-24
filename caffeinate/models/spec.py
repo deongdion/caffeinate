@@ -30,16 +30,20 @@ spec 은 extra(커스텀 키)를 담지 않는다 (무손실이 필요하면 to_
 """
 import copy
 from collections.abc import Mapping, Sequence
+from datetime import datetime
 from typing import Any
 
 from ..enums.editor import (
     Align,
     CodeLayout,
+    FontFamily,
     FontSize,
     ImageGroupLayout,
     LineLayout,
     LinkCardLayout,
     QuotationLayout,
+    VoteResultView,
+    VoteSort,
 )
 from ..utils.parsing import as_dict, as_int
 from .blocks import (
@@ -54,6 +58,7 @@ from .blocks import (
     ImageStrip,
     LinkCard,
     Paragraph,
+    ParagraphDefaults,
     Quote,
     RawBlock,
     Span,
@@ -63,6 +68,20 @@ from .blocks import (
     Text,
     TextStyle,
     Thumbnail,
+)
+from .media import (
+    Embed,
+    File,
+    Formula,
+    Map,
+    Material,
+    Place,
+    Schedule,
+    UploadedFile,
+    UploadedVideo,
+    Video,
+    Vote,
+    VoteItem,
 )
 from .photo import UploadedImage
 
@@ -76,6 +95,8 @@ TYPE_OF: dict[type[Block], str] = {
     Text: "text", Heading: "heading", Quote: "quote", Divider: "divider", Code: "code", Table: "table",
     Image: "image", ImageGroup: "image_group", ImageStrip: "image_strip", Sticker: "sticker",
     LinkCard: "link_card", RawBlock: "raw",
+    File: "file", Video: "video", Map: "map", Formula: "formula", Vote: "vote", Schedule: "schedule",
+    Embed: "embed", Material: "material",
 }
 CLASS_OF: dict[str, type[Block]] = {v: k for k, v in TYPE_OF.items()}
 
@@ -97,6 +118,8 @@ def _span_spec(s: Span) -> Any:
                 d[k] = getattr(st, k)
         if st.size:
             d["size"] = str(getattr(st.size, "value", st.size))
+        if st.font:
+            d["font"] = str(getattr(st.font, "value", st.font))
     if s.link:
         d["link"] = s.link
     return d
@@ -104,12 +127,43 @@ def _span_spec(s: Span) -> Any:
 
 def _para_spec(p: Paragraph) -> Any:
     spans = [_span_spec(s) for s in p.spans]
-    if not p.align and len(spans) == 1 and isinstance(spans[0], str):
+    if not p.align and p.line_height is None and len(spans) == 1 and isinstance(spans[0], str):
         return spans[0]
     d: JSONDict = {"spans": spans}
     if p.align:
         d["align"] = str(getattr(p.align, "value", p.align))
+    if p.line_height is not None:
+        d["line_height"] = p.line_height
     return d
+
+
+def defaults_spec(df: ParagraphDefaults | None) -> JSONDict | None:
+    """기본 서식 -> spec {"font", "size", "color", ..., "align", "line_height"}"""
+    if df is None or df.is_empty():
+        return None
+    d: JSONDict = {}
+    if df.style is not None and not df.style.is_empty():
+        sp = _span_spec(Span("", style=df.style))
+        if isinstance(sp, dict):
+            d.update({k: v for k, v in sp.items() if k != "text"})
+    if df.align:
+        d["align"] = _v(df.align)
+    if df.line_height is not None:
+        d["line_height"] = df.line_height
+    return d
+
+
+def defaults_from(v: Any) -> ParagraphDefaults | None:
+    if v in (None, {}):
+        return None
+    d = as_dict(v)
+    if not d:
+        raise SpecError(f"defaults 는 객체여야 합니다: {v!r}")
+    st = _span_from({"text": "", **{k: x for k, x in d.items() if k not in ("align", "line_height")}}).style
+    try:
+        return ParagraphDefaults(style=st, align=d.get("align") or None, line_height=d.get("line_height"))
+    except (TypeError, ValueError) as e:
+        raise SpecError(str(e)) from e
 
 
 def paragraphs_spec(ps: Sequence[Paragraph]) -> Any:
@@ -149,6 +203,8 @@ def to_spec(block: Block, *, ids: bool = False) -> JSONDict:
     if t is None:
         raise SpecError(f"spec 으로 바꿀 수 없는 블록입니다: {type(block).__name__}")
     d: JSONDict = {"type": t}
+    if isinstance(block, Text | Heading | Quote) and (ds := defaults_spec(block.defaults)):
+        d["defaults"] = ds
     if isinstance(block, Text | Heading):
         d["content"] = paragraphs_spec(block.content)
     elif isinstance(block, Quote):
@@ -183,11 +239,77 @@ def to_spec(block: Block, *, ids: bool = False) -> JSONDict:
                               "height": block.thumbnail.height}
         if block.sign:
             d["sign"] = block.sign
-    elif isinstance(block, RawBlock):
+    elif isinstance(block, File):
+        up = block.uploaded
+        if up is not None:
+            d["uploaded"] = {"file_id": up.file_id, "file_name": up.file_name, "file_size": up.file_size}
+        else:
+            d["source"] = _path_or_none(block.source)
+    elif isinstance(block, Video):
+        vu = block.uploaded
+        if vu is not None:
+            d["uploaded"] = {"vid": vu.vid, "file_size": vu.file_size, "play_time": vu.play_time, "width": vu.width,
+                             "height": vu.height, "thumbnail": vu.thumbnail, "service_id": vu.service_id}
+        else:
+            d["source"] = _path_or_none(block.source)
+        d.update(title=block.title, description=block.description, tags=list(block.tags))
+    elif isinstance(block, Map):
+        d["places"] = [_place_spec(p) for p in block.places]
+    elif isinstance(block, Formula):
+        d["latex"] = block.latex
+    elif isinstance(block, Vote):
+        d.update(title=block.title,
+                 items=[i.name if i.image is None else {"name": i.name, "image": _path_or_none(i.image)}
+                        for i in block.items],
+                 multiple=block.multiple, secret=block.secret, result_view=_v(block.result_view), sort=_v(block.sort))
+        if block.close_at:
+            d["close_at"] = block.close_at.isoformat()
+        if block.close_voters:
+            d["close_voters"] = block.close_voters
+    elif isinstance(block, Schedule):
+        assert block.start is not None and block.end is not None
+        d.update(title=block.title, start=block.start.isoformat(), end=block.end.isoformat(),
+                 all_day=block.all_day, important=block.important, location=block.location,
+                 allow_share=block.allow_share)
+        if block.place:
+            d["place"] = _place_spec(block.place)
+    elif isinstance(block, RawBlock | Embed | Material):
         d["data"] = block.to_dict()
     if ids:
         d["id"] = block.id
     return d
+
+
+def _path_or_none(v: Any) -> str | None:
+    """경로·주소는 문자열로, bytes 는 spec 에 못 담는다 (None)"""
+    if isinstance(v, str):
+        return v
+    return str(v) if hasattr(v, "__fspath__") else None
+
+
+def _place_spec(p: Place) -> JSONDict:
+    d: JSONDict = {"name": p.name, "latitude": p.latitude, "longitude": p.longitude}
+    for k, v in (("address", p.address), ("place_id", p.place_id), ("tel", p.tel)):
+        if v:
+            d[k] = v
+    return d
+
+
+def _place_from(v: Any) -> Place:
+    d = as_dict(v)
+    if not d.get("name") or d.get("latitude") is None or d.get("longitude") is None:
+        raise SpecError(f"장소에는 name, latitude, longitude 가 있어야 합니다: {v!r}")
+    return Place(str(d["name"]), float(d["latitude"]), float(d["longitude"]), str(d.get("address") or ""),
+                 str(d.get("place_id") or ""), str(d.get("tel") or ""))
+
+
+def _dt(v: Any, what: str) -> Any:
+    if v in (None, ""):
+        return None
+    try:
+        return datetime.fromisoformat(str(v))
+    except ValueError as e:
+        raise SpecError(f"{what} 는 ISO 8601 날짜시각이어야 합니다 (예: 2026-12-01T19:00): {v!r}") from e
 
 
 def _cell_spec(c: Cell) -> Any:
@@ -219,7 +341,7 @@ def _span_from(v: Any) -> Span:
                 style=TextStyle(bold=bool(d.get("bold")), italic=bool(d.get("italic")),
                                 underline=bool(d.get("underline")), strike=bool(d.get("strike")),
                                 color=d.get("color") or None, background=d.get("background") or None,
-                                size=d.get("size") or None))
+                                size=d.get("size") or None, font=d.get("font") or None))
 
 
 def paragraphs_from(v: Any) -> list[Paragraph]:
@@ -239,7 +361,7 @@ def paragraphs_from(v: Any) -> list[Paragraph]:
             spans = d.get("spans")
             if not isinstance(spans, list):
                 raise SpecError(f"문단 객체에는 spans 배열이 있어야 합니다: {item!r}")
-            out.append(Paragraph([_span_from(s) for s in spans], d.get("align") or None))
+            out.append(Paragraph([_span_from(s) for s in spans], d.get("align") or None, d.get("line_height")))
     return out
 
 
@@ -273,6 +395,8 @@ def _from_spec(item: JSONDict) -> Block:
     if t not in CLASS_OF:
         raise SpecError(f"알 수 없는 블록 type 입니다: {t!r} (가능: {sorted(CLASS_OF)})")
     kw: JSONDict = {"id": d["id"]} if d.get("id") else {}
+    if t in ("text", "heading", "quote") and d.get("defaults") is not None:
+        kw["defaults"] = defaults_from(d["defaults"])
     if t == "text":
         return Text(paragraphs_from(d.get("content", "")), **kw)
     if t == "heading":
@@ -309,7 +433,39 @@ def _from_spec(item: JSONDict) -> Block:
                         Thumbnail(src=str(th["src"]), width=as_int(th.get("width")), height=as_int(th.get("height")))
                         if th.get("src") else None,
                         d.get("sign") or None, layout=d.get("layout") or LinkCardLayout.LARGE_IMAGE, **kw)
-    return RawBlock(dict(as_dict(d.get("data"))), **kw)
+    if t == "file":
+        up = as_dict(d.get("uploaded"))
+        return File(UploadedFile(str(up.get("file_id") or ""), str(up.get("file_name") or ""),
+                                 as_int(up.get("file_size"))) if up else d.get("source"), **kw)
+    if t == "video":
+        vu = as_dict(d.get("uploaded"))
+        vsrc: Any = (UploadedVideo(str(vu.get("vid") or ""), as_int(vu.get("file_size")), as_int(vu.get("play_time")),
+                                  as_int(vu.get("width")), as_int(vu.get("height")), str(vu.get("thumbnail") or ""),
+                                  str(vu.get("service_id") or "5")) if vu else d.get("source"))
+        return Video(vsrc, str(d.get("title") or ""), str(d.get("description") or ""),
+                     [str(x) for x in as_list_strict(d.get("tags") or [], "tags")], **kw)
+    if t == "map":
+        return Map([_place_from(p) for p in as_list_strict(d.get("places"), "places")], **kw)
+    if t == "formula":
+        return Formula(str(d.get("latex") or ""), **kw)
+    if t == "vote":
+        items = [VoteItem(x) if isinstance(x, str) else VoteItem(str(as_dict(x).get("name") or ""),
+                                                                  as_dict(x).get("image"))
+                 for x in as_list_strict(d.get("items"), "items")]
+        return Vote(str(d.get("title") or ""), items, as_int(d.get("multiple"), 1), bool(d.get("secret", True)),
+                    d.get("result_view") or VoteResultView.AFTER_VOTE, d.get("sort") or VoteSort.ITEM_INDEX,
+                    _dt(d.get("close_at"), "close_at"), as_int(d.get("close_voters")) or None, **kw)
+    if t == "schedule":
+        return Schedule(str(d.get("title") or ""), _dt(d.get("start"), "start"), _dt(d.get("end"), "end"),
+                        bool(d.get("all_day")), bool(d.get("important")), str(d.get("location") or ""),
+                        _place_from(d["place"]) if d.get("place") else None, bool(d.get("allow_share")), **kw)
+    data = dict(as_dict(d.get("data")))
+    if t in ("embed", "material"):
+        b = Block.from_dict(data)
+        if type(b) is not CLASS_OF[t]:
+            raise SpecError(f"{t} 의 data 는 @ctype {CLASS_OF[t].CTYPE} 컴포넌트여야 합니다")
+        return b
+    return RawBlock(data, **kw)
 
 
 def as_list_strict(v: Any, what: str) -> list[Any]:
@@ -327,7 +483,10 @@ def _cell_from(v: Any) -> Cell:
 
 
 def document_to_spec(doc: Document, *, ids: bool = False) -> JSONDict:
-    return {"blocks": [to_spec(b, ids=ids) for b in doc.blocks]}
+    d: JSONDict = {"blocks": [to_spec(b, ids=ids) for b in doc.blocks]}
+    if ds := defaults_spec(doc.defaults):
+        d["defaults"] = ds
+    return d
 
 
 def document_from_spec(data: Any) -> Document:
@@ -341,7 +500,11 @@ def document_from_spec(data: Any) -> Document:
             raise SpecError(f"blocks[{n}]: {e}") from e
     if not blocks:
         raise SpecError("blocks 가 비어 있습니다")
-    return Document(blocks)
+    try:
+        df = defaults_from(data.get("defaults")) if isinstance(data, Mapping) else None
+    except SpecError as e:
+        raise SpecError(f"defaults: {e}") from e
+    return Document(blocks, defaults=df)
 
 
 # ---------------------------------------------------------------- JSON Schema (자유 작성)
@@ -358,25 +521,39 @@ def _defs() -> JSONDict:
             "underline": {"type": "boolean"}, "strike": {"type": "boolean"},
             "color": {"type": "string", "description": "#rrggbb"},
             "background": {"type": "string", "description": "#rrggbb"},
-            "size": _enum(FontSize), "link": {"type": "string", "description": "http(s) 주소"}}}]}
+            "size": _enum(FontSize), "font": _enum(FontFamily),
+            "link": {"type": "string", "description": "http(s) 주소"}}}]}
+    line_height = {"type": "number", "exclusiveMinimum": 0, "description": "줄 간격 (1.6 = 160%, 에디터 메뉴 1.5~2.1)"}
+    defaults = {"type": "object", "additionalProperties": False,
+                "description": "모든 문단의 기본 서식 (문단·글자에 직접 준 값이 이긴다)", "properties": {
+                    "bold": {"type": "boolean"}, "italic": {"type": "boolean"}, "underline": {"type": "boolean"},
+                    "strike": {"type": "boolean"}, "color": {"type": "string", "description": "#rrggbb"},
+                    "background": {"type": "string", "description": "#rrggbb"}, "size": _enum(FontSize),
+                    "font": _enum(FontFamily), "align": _enum(Align), "line_height": line_height}}
     para = {"anyOf": [{"type": "string"}, {
         "type": "object", "required": ["spans"], "additionalProperties": False, "properties": {
-            "spans": {"type": "array", "items": {"$ref": "#/$defs/span"}}, "align": _enum(Align)}}]}
+            "spans": {"type": "array", "items": {"$ref": "#/$defs/span"}}, "align": _enum(Align),
+            "line_height": line_height}}]}
     paras = {"description": "문자열(줄바꿈 = 문단) 또는 문단 배열",
              "anyOf": [{"type": "string"}, {"type": "array", "items": {"$ref": "#/$defs/paragraph"}}]}
     cell = {"anyOf": [{"type": "string"}, {
         "type": "object", "required": ["content"], "additionalProperties": False, "properties": {
             "content": {"$ref": "#/$defs/paragraphs"}, "col_span": {"type": "integer", "minimum": 1},
             "row_span": {"type": "integer", "minimum": 1}, "background": {"type": "string"}, "align": _enum(Align)}}]}
+    place = {"type": "object", "required": ["name", "latitude", "longitude"], "additionalProperties": False,
+             "properties": {"name": {"type": "string"}, "latitude": {"type": "number"},
+                            "longitude": {"type": "number"}, "address": {"type": "string"},
+                            "place_id": {"type": "string"}, "tel": {"type": "string"}}}
     image = _obj("image", {"source": {"type": "string", "description": "사진 파일 경로"},
                            "caption": {"$ref": "#/$defs/paragraphs"}, "link": {"type": "string"},
                            "uploaded": {"type": "object"}, "represent": {"type": "boolean"}}, [])
 
     blocks = {
-        "text": _obj("text", {"content": {"$ref": "#/$defs/paragraphs"}}, ["content"]),
-        "heading": _obj("heading", {"content": {"$ref": "#/$defs/paragraphs"}}, ["content"]),
+        "text": _obj("text", {"content": {"$ref": "#/$defs/paragraphs"}, "defaults": {"$ref": "#/$defs/defaults"}}, ["content"]),
+        "heading": _obj("heading", {"content": {"$ref": "#/$defs/paragraphs"}, "defaults": {"$ref": "#/$defs/defaults"}}, ["content"]),
         "quote": _obj("quote", {"content": {"$ref": "#/$defs/paragraphs"}, "source": {"$ref": "#/$defs/paragraphs"},
-                                "layout": _enum(QuotationLayout)}, ["content"]),
+                                "layout": _enum(QuotationLayout), "defaults": {"$ref": "#/$defs/defaults"}},
+                      ["content"]),
         "divider": _obj("divider", {"layout": _enum(LineLayout)}, []),
         "code": _obj("code", {"code": {"type": "string"}, "layout": _enum(CodeLayout), "font_size": _enum(FontSize)},
                      ["code"]),
@@ -396,8 +573,35 @@ def _defs() -> JSONDict:
                                             "height": {"type": "integer"}}, "required": ["src"]},
                                         "sign": {"type": "string", "description": "서버 서명 (cafe.editor.link_card)"}},
                           ["url"]),
+        "file": _obj("file", {"source": {"type": "string", "description": "첨부할 파일 경로 (50MB 까지)"},
+                              "uploaded": {"type": "object"}}, []),
+        "video": _obj("video", {"source": {"type": "string", "description": "동영상 파일 경로"},
+                                "uploaded": {"type": "object"},
+                                "title": {"type": "string", "maxLength": 40},
+                                "description": {"type": "string", "maxLength": 300},
+                                "tags": {"type": "array", "maxItems": 10, "items": {"type": "string"}}}, []),
+        "map": _obj("map", {"places": {"type": "array", "minItems": 1, "items": place}}, ["places"]),
+        "formula": _obj("formula", {"latex": {"type": "string", "description": "LaTeX 수식"}}, ["latex"]),
+        "vote": _obj("vote", {
+            "title": {"type": "string"},
+            "items": {"type": "array", "minItems": 2, "items": {"anyOf": [{"type": "string"}, {
+                "type": "object", "required": ["name"], "additionalProperties": False,
+                "properties": {"name": {"type": "string"},
+                               "image": {"type": "string", "description": "사진 파일 경로 또는 주소"}}}]}},
+            "multiple": {"type": "integer", "minimum": 0, "description": "1 = 하나만, 0 = 무제한, n = 최대 n개"},
+            "secret": {"type": "boolean", "description": "무기명 투표 (기본 true)"},
+            "result_view": _enum(VoteResultView), "sort": _enum(VoteSort),
+            "close_at": {"type": "string", "description": "자동 종료 날짜시각 ISO 8601"},
+            "close_voters": {"type": "integer", "minimum": 1, "description": "이 인원이 참여하면 종료"}},
+            ["title", "items"]),
+        "schedule": _obj("schedule", {
+            "title": {"type": "string"},
+            "start": {"type": "string", "description": "시작 ISO 8601 (시간대 없으면 서울)"},
+            "end": {"type": "string", "description": "끝 ISO 8601 (없으면 시작 + 1시간)"},
+            "all_day": {"type": "boolean"}, "important": {"type": "boolean"}, "location": {"type": "string"},
+            "place": place, "allow_share": {"type": "boolean"}}, ["title", "start"]),
     }
-    return {"span": span, "paragraph": para, "paragraphs": paras, "cell": cell,
+    return {"defaults": defaults, "span": span, "paragraph": para, "paragraphs": paras, "cell": cell,
             **{f"block_{k}": v for k, v in blocks.items()},
             "block": {"anyOf": [{"$ref": f"#/$defs/block_{k}"} for k in blocks]}}
 
@@ -411,7 +615,8 @@ def document_schema() -> JSONDict:
     """자유 작성용 JSON Schema ({"blocks": [블록...]}). raw 블록은 넣지 않는다 (AI 가 만들 대상이 아님)"""
     return {"$schema": "https://json-schema.org/draft/2020-12/schema", "title": "caffeinate Document",
             "type": "object", "additionalProperties": False, "required": ["blocks"],
-            "properties": {"blocks": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/block"}}},
+            "properties": {"blocks": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/block"}},
+                           "defaults": {"$ref": "#/$defs/defaults"}},
             "$defs": _defs()}
 
 
@@ -447,6 +652,19 @@ def _fill_fields(b: Block, rich: bool) -> JSONDict | None:
                          "description": (h + " - " if h else "") + f"{len(rows)}줄 x 칸 수 {cols} (줄마다 칸 수 고정)"}}
     if isinstance(b, Image) and h:
         return {"caption": {"type": "string", "description": h}}
+    if isinstance(b, Vote):
+        n = len(b.items)
+        return {"title": {"type": "string", **({"description": h} if h else {})},
+                "items": {"type": "array", "minItems": n, "maxItems": n, "items": {"type": "string"},
+                          "description": f"투표 항목 이름 {n}개"}}
+    if isinstance(b, Schedule):
+        return {"title": {"type": "string", **({"description": h} if h else {})},
+                "location": {"type": "string", "description": "장소 (없으면 빈 문자열)"}}
+    if isinstance(b, Formula) and h:
+        return {"latex": {"type": "string", "description": h}}
+    if isinstance(b, Video) and h:
+        return {"title": {"type": "string", "maxLength": 40, "description": h},
+                "description": {"type": "string", "maxLength": 300}}
     return None
 
 
@@ -488,7 +706,7 @@ def fill(doc: Document, data: Any, *, strict: bool = True) -> Document:
         if missing or unknown:
             raise SpecError(f"채우기 결과가 템플릿과 다릅니다 (빠짐: {missing}, 모름: {unknown})")
     out = Document([copy.deepcopy(b) for b in doc.blocks], version=doc.version, theme=doc.theme,
-                   language=doc.language, extra=dict(doc.extra))
+                   language=doc.language, defaults=copy.deepcopy(doc.defaults), extra=dict(doc.extra))
     for key, i in keys.items():
         if key not in d:
             continue
@@ -520,6 +738,27 @@ def _apply(b: Block, item: JSONDict, strict: bool) -> None:
         b.code = str(item["code"])
     if isinstance(b, Image) and "caption" in item:
         b.caption = paragraphs_from(item["caption"]) or None
+    if isinstance(b, Vote):
+        if "title" in item:
+            b.title = str(item["title"])
+        if "items" in item:
+            names = as_list_strict(item["items"], "items")
+            if strict and len(names) != len(b.items):
+                raise SpecError(f"투표 항목 수가 템플릿과 다릅니다: {len(b.items)}")
+            for it, nm in zip(b.items, names, strict=False):
+                it.name = str(nm)
+    if isinstance(b, Schedule):
+        if "title" in item:
+            b.title = str(item["title"])
+        if "location" in item:
+            b.location = str(item["location"])
+    if isinstance(b, Formula) and "latex" in item:
+        b.latex, b.html, b.thumbnail = str(item["latex"]), None, None   # 바뀐 수식은 작성 때 다시 렌더링
+    if isinstance(b, Video):
+        if "title" in item:
+            b.title = str(item["title"])
+        if "description" in item:
+            b.description = str(item["description"])
     if isinstance(b, Table) and "rows" in item:
         rows = as_list_strict(item["rows"], "rows")
         if strict and (len(rows) != len(b.rows) or any(
