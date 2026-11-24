@@ -5,15 +5,18 @@ images 에는 UploadedImage / bytes / 파일 경로 / (bytes, 파일명) 을 섞
 삭제 [실측 2026-11-13]: cafe-mobile/ArticleDelete.json (브라우저 캡처).
 """
 from collections.abc import Sequence
-from typing import Any
+from typing import Any, TypeAlias
 
 from ..core import endpoints
 from ..core.errors import ParseError
 from ..core.session import ensure_success
 from ..models import Article, ArticleRef, UploadedImage
-from ..utils.editor import build_content_json
+from ..models.blocks import Block, Document, Image, Text
 from ..utils.parsing import as_int, dig, parse_cafe_url
 from .base import BaseService, CafeLike, ImageLike, gw_params
+
+Body: TypeAlias = str | Document | Block | Sequence[Block | str]
+"""본문: 문자열(줄 = 문단) / Document / 블록 하나 / 블록·문자열 목록"""
 
 
 class ArticleService(BaseService):
@@ -77,25 +80,27 @@ class ArticleService(BaseService):
         cafe_id: CafeLike,
         menu_id: int,
         title: str,
-        body: str,
+        body: Body,
         *,
         images: Sequence[ImageLike] | None = None,
     ) -> ArticleRef:
         """게시글 작성 -> 새 글의 ArticleRef [실측 2026-11-12: E2E 성공] (로그인 + 카페 멤버)
 
         - cafe_id: 카페 ID / slug / 카페 URL,  menu_id: 게시판 번호
-        - body: 본문 텍스트 (줄바꿈/빈 줄 유지)
+        - body: 본문 텍스트 (줄바꿈/빈 줄 유지) 또는 블록 (Document / [Heading(..), "글", Image(..), ...])
+          블록 안 Image 의 source 가 올리지 않은 것이면 자동 업로드한다 [실측 2026-11-24]
         - images: UploadedImage / bytes / 파일 경로 / (bytes, 파일명) - 올리지 않은 것은 자동 업로드,
           본문 뒤에 입력 순서대로 붙는다 (첫 장이 대표 이미지)
 
             ref = await cafe.articles.write("deongdion", 1, "제목", "본문", images=["a.png", (png, "b.png")])
+            ref = await cafe.articles.write(cid, 1, "제목", [Heading("소제목"), "본문", Image("a.png"), "끝"])
         """
         self._require_login()
         cafe_id = await self._cafe_id(cafe_id)
-        uploaded = await self._images(cafe_id, menu_id, images)
+        content_json = await self.content_json(cafe_id, menu_id, body, images)
         data = await self.session.post_json(
             endpoints.editor_write_article(cafe_id, menu_id),
-            json_body=_article_payload(cafe_id, menu_id, title, build_content_json(body, uploaded)),
+            json_body=_article_payload(cafe_id, menu_id, title, content_json),
             headers=dict(endpoints.PRODUCT_HEADERS),
             referer=endpoints.write_page(cafe_id, menu_id),
         )
@@ -109,7 +114,7 @@ class ArticleService(BaseService):
         ref: ArticleRef | str,
         menu_id: int,
         title: str,
-        body: str,
+        body: Body,
         *,
         images: Sequence[ImageLike] | None = None,
     ) -> ArticleRef:
@@ -122,17 +127,31 @@ class ArticleService(BaseService):
         """
         self._require_login()
         r = await self.resolve(ref)
-        uploaded = await self._images(r.cafe_id, menu_id, images)
+        content_json = await self.content_json(r.cafe_id, menu_id, body, images)
         data = await self.session.post_json(
             endpoints.editor_update_article(r.cafe_id, r.article_id),
-            json_body=_article_payload(
-                r.cafe_id, menu_id, title, build_content_json(body, uploaded), with_head_id=True
-            ),
+            json_body=_article_payload(r.cafe_id, menu_id, title, content_json, with_head_id=True),
             headers=dict(endpoints.PRODUCT_HEADERS),
             referer=endpoints.article_page(r.cafe_id, r.article_id, menu_id),
         )
         article_id = as_int(dig(data, "result", "articleId")) or r.article_id
         return ArticleRef(cafe_id=r.cafe_id, article_id=article_id, menu_id=menu_id, cafe_url=r.cafe_url)
+
+    async def content_json(
+        self, cafe_id: CafeLike, menu_id: int, body: Body, images: Sequence[ImageLike] | None = None
+    ) -> str:
+        """본문 입력 -> contentJson 문자열 (블록 안/뒤 사진은 올리지 않은 것만 업로드, 순서 유지)"""
+        doc = document_of(body)
+        cid = await self._cafe_id(cafe_id)
+        uploaded = await self._images(cid, menu_id, images)
+        if uploaded:
+            doc.blocks.extend(Image(u) for u in uploaded)
+        pending = doc.pending_images()
+        if pending:
+            done = await self._client.photos.upload_many(cid, menu_id, [p.source for p in pending])
+            for block, img in zip(pending, done, strict=True):
+                block.source = img
+        return doc.to_json()
 
     async def _images(
         self, cafe_id: int, menu_id: int, images: Sequence[ImageLike] | None
@@ -164,6 +183,18 @@ class ArticleService(BaseService):
         )
         # [실측 2026-11-13] 성공: {"message": {"status": "200", ..., "result": {"msg": "Success"}}}
         ensure_success(data, "게시글 삭제", endpoints.ARTICLE_DELETE)
+
+
+def document_of(body: Body) -> Document:
+    """본문 입력 -> Document (원본 Document 는 바꾸지 않도록 블록 목록을 복사)"""
+    if isinstance(body, Document):
+        return Document(list(body.blocks), id=body.id, version=body.version, theme=body.theme,
+                        language=body.language, extra=dict(body.extra))
+    if isinstance(body, str):
+        return Document([Text(body)] if body else [])
+    if isinstance(body, Block):
+        return Document([body])
+    return Document(list(body))
 
 
 def _article_payload(

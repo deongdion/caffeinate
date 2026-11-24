@@ -305,12 +305,14 @@ async def _challenge_visible(page: Any) -> bool:
 
 async def _captcha_audio_key(page: Any) -> str | None:
     """음성 모드 <audio src="...key=..."> 에서 캡차 키 추출"""
+    from playwright.async_api import Error as PlaywrightError
+
     try:
         src = await page.evaluate("() => { const a = document.querySelector('audio'); return a ? a.src : ''; }")
         if src and "key=" in str(src):
             return str(src).split("key=")[1].split("&")[0]
-    except Exception:
-        pass
+    except PlaywrightError:
+        return None
     return None
 
 
@@ -375,7 +377,7 @@ async def _solve_captcha_audio_once(page: Any, opt: LoginOptions, on_status: Cal
                 answer = digits
                 break
             on_status(f"[캡차] OCR 응답이 숫자가 아님 ({ocr_try}/2): '{digits}'")
-        except Exception as e:
+        except (PlaywrightError, LoginError, ValueError) as e:  # HTTP 실패/시간 초과, OCR 오류, JSON 파싱
             on_status(f"[캡차] OCR 실패 ({ocr_try}/2): {type(e).__name__}: {e}")
         await asyncio.sleep(1.0)
     if not answer:

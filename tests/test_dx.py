@@ -34,7 +34,6 @@ from caffeinate.core import endpoints
 from caffeinate.core.errors import api_error_class
 from caffeinate.core.session import CafeSession, ensure_success, parse_json
 from caffeinate.enums import HttpMethod
-from caffeinate.services import articles as articles_mod
 from caffeinate.services.base import BaseService, image_source
 from caffeinate.services.likes import react_status
 
@@ -261,13 +260,6 @@ def test_write_images_auto_upload_keeps_order(
         return UploadedImage(url=f"/h/{filename}", path="/h", domain="d", file_name=filename)
 
     monkeypatch.setattr(client.photos, "upload", fake_upload)
-    seen: list[list[str]] = []
-
-    def fake_content(body: str, images: list[UploadedImage] | None = None) -> str:
-        seen.append([i.file_name for i in images or []])
-        return "{}"
-
-    monkeypatch.setattr(articles_mod, "build_content_json", fake_content)
     posted: list[Any] = []
 
     async def fake_post_json(url: str, json_body: Any = None, **kw: Any) -> Any:
@@ -282,7 +274,8 @@ def test_write_images_auto_upload_keeps_order(
         "deongdion", 1, "t", "b", images=[b"\x89PNGa", pre, (b"\x89PNGb", "b.png"), str(f), f]
     ))
     assert ref == ArticleRef(cafe_id=31547053, article_id=42, menu_id=1)
-    assert seen == [["image.png", "pre.png", "b.png", "c.png", "c.png"]]
+    doc = json.loads(posted[0][1]["article"]["contentJson"])["document"]
+    assert [c.get("fileName") for c in doc["components"]] == [None, "image.png", "pre.png", "b.png", "c.png", "c.png"]
     assert [(u[0], u[1], u[3]) for u in uploads] == [
         (31547053, 1, "image.png"), (31547053, 1, "b.png"), (31547053, 1, "c.png"), (31547053, 1, "c.png"),
     ]

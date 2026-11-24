@@ -5,6 +5,7 @@ from .boards import BoardService
 from .cafes import CafeService
 from .captcha import CaptchaSolver, ImageCaptchaOcr, SoundCaptchaOcr
 from .comments import CommentService
+from .editor import EditorService
 from .likes import LikeService
 from .members import MemberService
 from .photos import PhotoService
@@ -17,6 +18,7 @@ __all__ = [
     "CafeService",
     "CaptchaSolver",
     "CommentService",
+    "EditorService",
     "ImageCaptchaOcr",
     "ImageLike",
     "LikeService",

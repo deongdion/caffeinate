@@ -116,6 +116,10 @@ def icon_finish(session_key: str) -> str:
 # ---- 에디터/사진 [실측 2026-11-12] ----
 EDITOR: Final = "https://apis.cafe.naver.com/editor"
 PHOTO_SESSION_KEY: Final = "https://platform.editor.naver.com/api/cafepc001/v1/photo-uploader/session-key"
+# 에디터 부가 API [실측 2026-11-24: service_config 의 apiInfo, 헤더 se-authorization=에디터 JWT]
+SE_PLATFORM: Final = "https://platform.editor.naver.com/api/cafepc001/v1"
+SE_STICKERS: Final = f"{SE_PLATFORM}/stickers"          # 묶음 목록, /{packCode} 는 묶음 안 스티커
+SE_OGLINK: Final = f"{SE_PLATFORM}/oglink"              # ?url= -> {oglink{summary..}, oglinkSign}
 UPPHOTO: Final = "https://cafe.upphoto.naver.com"
 PHINF_DOMAIN: Final = "https://cafeptthumb-phinf.pstatic.net"
 

@@ -7,6 +7,8 @@ from ..core import endpoints
 from ..core.errors import NaverAPIError, ParseError
 from ..core.session import ensure_success
 from ..models import ArticleRef, Comment, CommentPage, UploadedImage
+from ..models.blocks import Sticker
+from ..models.comment_draft import CommentBody, CommentDraft, image_fields
 from ..utils.parsing import dig
 from .base import BaseService, ImageLike, gw_params, image_source
 
@@ -28,21 +30,9 @@ def comment_id_from(resp: Any) -> int:
 ImageInput = ImageLike  # 0.3 호환 이름
 
 
-def image_fields(img: UploadedImage | None) -> dict[str, Any]:
-    """사진 댓글 폼 필드 - stickerId 와 refCommentId 사이, 순서까지 캡처값 그대로 [실측 2026-11-13 Camoufox UI 캡처]
-
-    imagePath 는 upphoto 응답 path(파일명 없는 해시 경로) 끝에 "/" 를 붙인 값이다
-    (예: /MjAy.../MDAx...PNG/). imageFileName 은 응답 fileName.
-    """
-    if img is None:
-        return {}
-    path = img.path or img.url.rsplit("/", 1)[0]
-    return {
-        "imagePath": path if path.endswith("/") else f"{path}/",
-        "imageFileName": img.file_name,
-        "imageWidth": img.width,
-        "imageHeight": img.height,
-    }
+def _sticker_id(sticker: str | Sticker) -> str:
+    """Sticker -> 댓글 stickerId ("cafe_001-1-185-160")"""
+    return sticker.comment_id if isinstance(sticker, Sticker) else str(sticker or "")
 
 
 def comment_fields(
@@ -123,16 +113,17 @@ class CommentService(BaseService):
     async def add(
         self,
         ref: ArticleRef | str,
-        text: str,
+        text: CommentBody = "",
         *,
-        sticker_id: str = "",
+        sticker_id: str | Sticker = "",
         image: ImageLike | None = None,
         filename: str | None = None,
     ) -> int:
         """댓글 작성 -> 새 댓글의 comment_id (로그인 필요)
 
-        - text: 내용 (스티커만 보낼 때는 "")
-        - sticker_id: 스티커 "{stickerCode}-{w}-{h}" - gfmarket proxyStickerList 항목 (예: motion3d_02-5-185-160)
+        - text: 내용 - 문자열 / CommentDraft / 블록 / 블록 목록 ([Text, Sticker, Image] 처럼 글과 같은 블록)
+          [실측 2026-11-24] 글 + 스티커 1개 + 사진 1장까지 함께, CP949 6000바이트(한글 2, 영문·이모지 1)까지
+        - sticker_id: 스티커 "{stickerCode}-{w}-{h}" (예: motion3d_02-5-185-160) 또는 Sticker (cafe.editor.stickers)
         - image: 사진 댓글 (bytes / 파일 경로 / (bytes, 파일명) / 이미 올린 UploadedImage). 자동 업로드한다
         - filename: bytes 일 때 파일명 (기본 image.png)
 
@@ -141,20 +132,21 @@ class CommentService(BaseService):
         연속 등록 제한(2001)은 Settings.comment_retry_* 만큼 기다렸다 재시도하고, 그래도 막히면 RateLimitedError.
 
             cid = await cafe.comments.add(ref, "사진 댓글", image="a.png")
+            cid = await cafe.comments.add(ref, ["블록 댓글", sticker, Image("a.png")])
         """
         self._require_login()
         r = await self._client.articles.resolve(ref)
-        img = await self._image(r, image, filename)
-        resp = await self._post(endpoints.COMMENT_POST, r, comment_fields(text, sticker_id, img))
+        draft = await self._draft(r, text, sticker_id, image, filename)
+        resp = await self._post(endpoints.COMMENT_POST, r, draft.to_dict())
         return comment_id_from(resp)
 
     async def reply(
         self,
         ref: ArticleRef | str,
         comment_id: int,
-        text: str,
+        text: CommentBody = "",
         *,
-        sticker_id: str = "",
+        sticker_id: str | Sticker = "",
         image: ImageLike | None = None,
         filename: str | None = None,
     ) -> int:
@@ -165,9 +157,20 @@ class CommentService(BaseService):
         """
         self._require_login()
         r = await self._client.articles.resolve(ref)
-        img = await self._image(r, image, filename)
-        resp = await self._post(endpoints.COMMENT_REPLY, r, comment_fields(text, sticker_id, img, comment_id))
+        draft = await self._draft(r, text, sticker_id, image, filename)
+        resp = await self._post(endpoints.COMMENT_REPLY, r, draft.to_dict(comment_id))
         return comment_id_from(resp)
+
+    async def _draft(
+        self, r: ArticleRef, body: CommentBody, sticker: str | Sticker, image: ImageLike | None, filename: str | None
+    ) -> CommentDraft:
+        """댓글 입력 -> 사진까지 올린 CommentDraft (입력 검사는 CommentDraft 가 한다)"""
+        if filename is not None and image is not None and not isinstance(image, UploadedImage | tuple):
+            image = image_source(image, filename)  # bytes/경로 + 파일명 -> (데이터, 파일명)
+        draft = CommentDraft.of(body, sticker=sticker or None, image=image)
+        if draft.needs_upload:
+            draft.image = await self._image(r, draft.image, None)
+        return draft
 
     async def _image(self, r: ArticleRef, image: ImageLike | None, filename: str | None) -> UploadedImage | None:
         """댓글 사진 입력 -> UploadedImage (필요하면 업로드)"""

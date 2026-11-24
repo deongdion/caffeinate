@@ -4,6 +4,7 @@ from datetime import datetime
 from typing import Any, Self
 
 from ..utils.parsing import JSON, as_dict, as_int, as_list, ms_to_datetime
+from .blocks import Sticker
 from .member import Writer
 
 
@@ -25,6 +26,7 @@ class Comment:
     is_mine: bool = False
     is_article_writer: bool = False
     image_url: str = ""          # 사진 댓글 (items[].image.url) [실측 2026-11-13]
+    sticker: Sticker | None = None  # 스티커 댓글 (items[].sticker) [실측 2026-11-24]
     reply_to_nick: str = ""      # 대댓글이 언급한 상대 (items[].replyMember.nick) [실측 2026-11-13]
     is_best: bool = False        # 베스트 댓글 (gw v4 bestComment / best-comments isBest) [실측 2026-11-13 Aside]
     like_count: int = 0          # 공감 수 (best-comments likeItCount) [Aside: 앱 번들 파서 근거]
@@ -47,12 +49,25 @@ class Comment:
             is_mine=bool(d.get("self", False)),
             is_article_writer=bool(d.get("isArticleWriter", False)),
             image_url=str(as_dict(d.get("image")).get("url") or ""),
+            sticker=_sticker(d.get("sticker")),
             reply_to_nick=str(as_dict(d.get("replyMember")).get("nick") or ""),
             is_best=bool(d.get("isBest") or d.get("bestComment")),
             like_count=as_int(d.get("likeItCount")),
             reply_count=as_int(d.get("replyCount")),
             raw=d,
         )
+
+
+def _sticker(v: Any) -> Sticker | None:
+    """댓글 sticker {"id": "cafe_001-2-185-160", "url", "animation", ...} -> Sticker (id 의 w/h 가 원본 크기)"""
+    d = as_dict(v)
+    try:
+        st = Sticker.parse(str(d.get("id") or ""))
+    except ValueError:
+        return None
+    st.url = str(d.get("url") or "") or None
+    st.animated = bool(d.get("animation"))
+    return st
 
 
 def build_tree(flat: list[Comment]) -> list[Comment]:

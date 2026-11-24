@@ -157,11 +157,11 @@ async with await Caffeinate.login() as cafe:
 | | `iter_articles(cafe, menu, limit=)` | 글을 페이지 넘기며 하나씩 (async for) |
 | | `notices(cafe, menu)` | 공지 목록 |
 | `articles` | `get(ref)` | 글 상세 (`Article`) |
-| | `write(cafe, menu, title, body, images=)` | 글쓰기 → `ArticleRef` |
+| | `write(cafe, menu, title, body, images=)` | 글쓰기 → `ArticleRef` (body 는 문자열 또는 [블록](#글-블록)) |
 | | `update(ref, menu, title, body, images=)` | 글 수정 → `ArticleRef` |
 | | `delete(ref)` | 글 삭제 |
 | `comments` | `all(ref)` / `iter(ref)` | 댓글 전체 (평탄 목록, `build_tree()` 로 트리) |
-| | `add(ref, text, image=)` | 댓글 → 댓글 ID |
+| | `add(ref, body, image=, sticker_id=)` | 댓글 → 댓글 ID (body 는 문자열 / [블록](#댓글-블록) / `CommentDraft`) |
 | | `reply(ref, comment_id, text, image=)` | 답글 → 댓글 ID |
 | | `delete(ref, comment_id)` | 댓글 삭제 |
 | | `best(ref)` | 베스트 댓글 |
@@ -172,6 +172,116 @@ async with await Caffeinate.login() as cafe:
 | | `my_info(cafe)` | 내 닉네임·등급·활동 통계 |
 | | `membership(cafe)` / `grade(cafe)` | 가입 여부 / 등급 |
 | `photos` | `upload(cafe, menu, data)` / `upload_many(...)` | 글쓰기용 이미지 업로드 (보통은 `images=` 로 자동) |
+| `editor` | `sticker_packs(cafe, menu)` / `stickers(cafe, menu, pack)` | 스티커 묶음 (`StickerPack`) / 스티커 (`Sticker`) |
+| | `all_stickers(cafe, menu)` | 모든 묶음의 스티커 `{packCode: [Sticker]}` |
+| | `link_card(cafe, menu, url)` | 링크 미리보기 블록 (`LinkCard`, 서버 서명 포함) |
+
+### 글 블록
+
+`articles.write/update` 의 body 에 문자열 대신 블록 목록이나 `Document` 를 넣는다. 블록은 전부 dataclass 이고
+`to_dict()` / `Block.from_dict()` / `Document.from_json()` 으로 SmartEditor contentJson 과 오간다.
+
+```python
+from caffeinate import (Align, Cell, Code, CodeLayout, Divider, Document, Heading, Image, ImageGroup, LineLayout,
+                        Paragraph, QuotationLayout, Quote, RawBlock, Span, Table, Text)
+
+packs = await cafe.editor.sticker_packs(cid, 1)           # StickerPack 16개 (cafe_001, cafe20_002, ...)
+sticker = (await cafe.editor.stickers(cid, 1, packs[0]))[0]
+card = await cafe.editor.link_card(cid, 1, "https://www.naver.com")
+doc = Document([
+    Heading("소제목"),
+    Text(["첫 문단", [Span("굵게", bold=True), " ", Span("빨강", color="#ff0000"), " ", Span("링크", link="https://naver.com")],
+          Paragraph([Span("가운데")], Align.CENTER)]),
+    Image("a.png", caption="사진 설명"),  # 올리지 않은 사진은 자동 업로드 (첫 사진이 대표)
+    "사진 사이 글",                       # 문자열 = Text
+    Quote("인용", source="출처", layout=QuotationLayout.BUBBLE),
+    Divider(LineLayout.LINE3),
+    Table([["이름", "값"], [Cell("합친 칸", col_span=2, background="#eeeeee")]]),
+    Code("print('hi')", CodeLayout.BLACK),
+    ImageGroup(["b.png", "c.png"]),
+    sticker, card,
+])
+await cafe.articles.write(cid, 1, "제목", doc)
+await cafe.comments.add(ref, "", sticker_id=sticker)   # 댓글 스티커
+```
+
+| 블록 | contentJson | 기본값 | 실측 (2026-11-24) |
+|---|---|---|---|
+| `Text(content)` | `text` | 줄마다 문단 | ✅ |
+| `Span(text, bold=, italic=, underline=, strike=, color=, background=, size=, link=)` | `textNode` + `nodeStyle` | 서식 없음 | ✅ 전부 렌더 |
+| `Paragraph(spans, align)` | `paragraph` | 정렬 없음 | ✅ |
+| `Heading(content)` | `sectionTitle` | | ✅ |
+| `Quote(content, source=, layout=)` | `quotation` | `DEFAULT` | ✅ 6가지 모양 |
+| `Divider(layout)` | `horizontalLine` | `DEFAULT` | ✅ 8가지 모양 |
+| `Code(code, layout, font_size)` | `code` (`codeContents`) | `DEFAULT` | ✅ 3가지 모양 |
+| `Table(rows, width=100)` / `Cell(...)` | `table` / `tableRow` / `tableCell` | 칸 너비 = 100 / 칸 수 | ✅ (표 `width` 없으면 500) |
+| `Image(source, represent=, link=, caption=)` | `image` | 첫 사진이 대표 | ✅ 글 사이사이 여러 장, 캡션 |
+| `ImageGroup(items, layout)` | `imageGroup` | `SLIDE` | ✅ (`COLLAGE` 는 뷰어 JS 가 그림) |
+| `ImageStrip(items)` | `imageStrip` | | ✅ |
+| `Sticker(pack_code, seq, w, h)` | `sticker` / 댓글 `stickerId` | 185×160 | ✅ 글·댓글, 움직이는/정지 묶음 |
+| `LinkCard(url, ..., layout=)` | `oglink` | `LARGE_IMAGE` | ✅ 4가지 모양 (서명 없어도 저장) |
+| `RawBlock(dict)` | 아무 컴포넌트 | id 자동 | ✅ |
+
+- **완전 커스텀**: 모든 블록에 `extra={...}` 를 주면 기본값을 덮어쓰거나 키를 더한다. `from_dict` 는 모르는 키를
+  `extra` 에, 모르는 `@ctype` 은 `RawBlock` 에 담아서 `to_dict()` 가 받은 그대로 돌려준다. layout 은 enum 밖 문자열도 받는다.
+- 전용 블록이 없는 컴포넌트 (번들 스키마에는 있음): 동영상(`video`), 파일(`file`), 지도(`placesMap`), 일정(`schedule`), 수식(`formula`), 오디오(`audio`), 외부 임베드(`oembed`), 자료(`material`). 각각 별도 업로드·서명 API 가 필요해서 실측하지 않았다. 기존 글에서 읽은 것은 `RawBlock` 으로 그대로 다시 저장되지만, 새로 만드는 것은 보장하지 않는다.
+- **로컬에서 막는 것** (`ValueError`/`TypeError`): 빈 문서, 업로드 안 된 `Image` 의 `to_dict()`, 형식이 틀린 색(`#rrggbb`·`rgb()`),
+  목록 밖 글자 크기, http(s) 가 아닌 링크, 빈 표, 1 미만 `col_span`, 사진 1장짜리 묶음, 잘못된 스티커.
+- **서버 동작** [실측]: 모르는 `@ctype`·id 없는 컴포넌트·외부 주소 사진 → 500 (99999), 없는 스티커 → 500 (31021),
+  layout 은 검사 안 함, 틀린 글자 크기·색은 조용히 버림, `javascript:` 링크는 비움, 텍스트 HTML 은 이스케이프.
+
+### 스키마 · AI 채우기
+
+블록은 사람·AI 가 쓰기 쉬운 단순 JSON(spec)과 JSON Schema 로도 오간다. (`to_dict` 는 서버용 무손실 형식)
+
+```python
+# 1) 템플릿 채우기: 구조(블록 종류·순서·모양·사진·스티커)는 고정, 내용 칸만 AI 가 채운다
+tpl = Document([Heading("", hint="글 제목"), Text("", hint="세 문단 본문"), Image("a.png", hint="사진 설명"),
+                Table([["", ""], ["", ""]], hint="장단점 표"), sticker])
+schema = tpl.fill_schema()        # {"0_heading": {"content"}, "1_text": {...}, "2_image": {"caption"}, "3_table": {"rows"}}
+ai_json = ...                     # 이 스키마로 AI(structured output)에 요청한 결과
+doc = tpl.fill(ai_json)           # 같은 id·모양·사진·스티커에 내용만 채운 새 Document (원본 그대로)
+await cafe.articles.write(cid, 1, "제목", doc)
+
+# 2) 자유 작성: AI 가 블록 목록을 통째로 만든다
+schema = Document.json_schema()   # {"blocks": [{"type": "text" | "heading" | "quote" | "table" | ...}]}
+doc = Document.from_spec(ai_json)
+doc.to_spec()                     # 반대 방향 (예시로 AI 에 보여줄 때)
+
+# 댓글
+CommentDraft.json_schema()        # {"text", "sticker"?}
+draft = CommentDraft.from_spec(ai_json, image="a.png")
+```
+
+- `hint` 는 스키마의 `description` 으로만 들어가고 contentJson 에는 나가지 않는다.
+- 채울 칸: 글·소제목·인용(출처)·코드·표(줄·칸 수 고정)·hint 가 있는 사진의 캡션. 나머지 블록은 스키마에서 빠지고 그대로 남는다.
+- `fill_schema(rich=True)` 면 글 칸에 서식 있는 문단 배열도 받는다 (기본은 문자열, 줄바꿈 = 문단).
+- 모든 칸 필수·추가 키 금지 스키마라 structured output 에 그대로 쓸 수 있다. `fill(strict=False)` 는 일부만 채워도 된다.
+- AI 출력이 틀리면 (모르는 type, 빠진 칸, 표 크기 불일치, 틀린 색·링크 등) 전부 `SpecError` (`ValueError`·`TypeError` 겸용).
+- [실측 2026-11-24] 템플릿 → 채우기 → 글 수정 저장, spec 댓글(글 + 스티커) 등록 확인.
+
+### 댓글 블록
+
+댓글도 글과 같은 블록으로 쓴다. 댓글 폼이 받는 것은 글 + 스티커 1개 + 사진 1장이라 `Text`·문자열·`Sticker`·`Image`
+만 받는다. 스티커 목록은 글과 같은 `cafe.editor.sticker_packs()` / `stickers()` 를 쓴다 (댓글에서도 실측 확인).
+
+```python
+sticker = (await cafe.editor.stickers(cid, 1, "cafe_001"))[0]
+cid_ = await cafe.comments.add(ref, [Text("첫 줄\n둘째 줄"), sticker, Image("a.png")])
+await cafe.comments.reply(ref, cid_, CommentDraft("답글", sticker=sticker))
+await cafe.comments.add(ref, sticker_id=sticker)           # 스티커만
+draft = CommentDraft.from_dict(form); draft.to_dict()      # 폼 필드와 왕복, extra 로 필드 추가
+```
+
+| 상황 | 서버 [실측 2026-11-24] | 라이브러리 |
+|---|---|---|
+| 여러 줄·빈 줄 | 그대로 저장 | 그대로 |
+| 글 + 스티커 + 사진 | 함께 저장 | 그대로 |
+| 빈 댓글 | 403 (9999 내용이 없는 댓글) | `ValueError` |
+| 6000바이트 초과 (CP949: 한글 2, 영문·이모지 1) | 400 (9999 댓글 길이 초과) | `ValueError` (`COMMENT_MAX_BYTES`) |
+| 서식·링크 `Span`, 캡션 있는 사진 | 서식 필드 없음 | `ValueError` |
+| 스티커 2개, 사진 2장 | 필드가 하나뿐 | `ValueError` |
+| 다른 블록 (`Heading`, `Table` ...) | — | `TypeError` |
 
 ### 카페 만들기
 
@@ -380,6 +490,10 @@ mypy caffeinate
 
 - 카페 만들기 `cafes.create()` (아이콘 업로드, 음성 캡차 OCR 자동 풀이, 입력 검증)
 - `Cafe.is_manager` (homepc `manageCafe`)
+- 글 블록: `Document`, `Text`, `Span`, `Heading`, `Quote`, `Divider`, `Code`, `Table`, `Image`, `ImageGroup`, `ImageStrip`, `Sticker`, `LinkCard`, `RawBlock` (to_dict/from_dict)
+- `cafe.editor` (`StickerPack`, 스티커, 링크 미리보기), `Comment.sticker`
+- 댓글 블록: `comments.add/reply` 가 블록 목록·`CommentDraft` 를 받음 (글 + 스티커 + 사진, 6000바이트 검사)
+- spec·JSON Schema: `Document.to_spec/from_spec/json_schema/fill_schema/fill`, 블록 `hint`, `CommentDraft.json_schema`, `SpecError`
 - `RequestKind.IFRAME` / `RequestKind.AUDIO` 헤더 (iframe 폼 제출, `<audio>` 미디어 요청)
 
 ### 0.4.0

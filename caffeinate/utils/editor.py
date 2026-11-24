@@ -1,9 +1,8 @@
 """SmartEditor(ONE) 문서 JSON 생성 - 글쓰기 contentJson [실측 2026-11-12 브라우저 캡처 형식]"""
-import json
 import secrets
 import time
 import uuid
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Final
 
 if TYPE_CHECKING:
     from ..models.photo import UploadedImage
@@ -24,55 +23,8 @@ def ulid() -> str:
     return stamp + "".join(_CROCKFORD[(rnd >> (5 * i)) & 0x1F] for i in reversed(range(16)))
 
 
-def _paragraph(line: str) -> dict[str, Any]:
-    """문단 한 개. 빈 줄은 textNode 값이 빈 문자열인 문단이다 [실측 2026-11-13 브라우저 캡처]"""
-    return {
-        "id": se_id(),
-        "nodes": [{"id": se_id(), "value": line, "@ctype": "textNode"}],
-        "@ctype": "paragraph",
-    }
-
-
-def _text_component(paragraphs: list[dict[str, Any]]) -> dict[str, Any]:
-    """문단 묶음 하나가 text 컴포넌트 하나 (브라우저는 줄마다 컴포넌트를 만들지 않는다)"""
-    return {
-        "id": se_id(),
-        "layout": "default",
-        "value": paragraphs,
-        "@ctype": "text",
-    }
-
-
-def _image_component(img: "UploadedImage", *, represent: bool) -> dict[str, Any]:
-    """[실측] path 는 업로드 응답의 <url>(해시경로/파일명). <path> 를 넣으면 저장 시 src 가 깨져 404"""
-    return {
-        "id": se_id(),
-        "layout": "default",
-        "src": img.src,
-        "internalResource": True,
-        "represent": represent,
-        "path": img.url,
-        "domain": img.domain,
-        "fileSize": img.file_size,
-        "width": img.width,
-        "widthPercentage": 0,
-        "height": img.height,
-        "originalWidth": img.width,
-        "originalHeight": img.height,
-        "fileName": img.file_name,
-        "caption": None,
-        "format": "normal",
-        "displayFormat": "normal",
-        "imageLoaded": True,
-        "contentMode": "normal",
-        "origin": {"srcFrom": "local", "@ctype": "imageOrigin"},
-        "ai": False,
-        "@ctype": "image",
-    }
-
-
 def build_content_json(text: str, images: "list[UploadedImage] | None" = None) -> str:
-    """본문 텍스트(줄 단위 문단) + 업로드 이미지 -> contentJson 문자열
+    """본문 텍스트(줄 단위 문단) + 업로드 이미지 -> contentJson 문자열 (= Document.from_text(...).to_json())
 
     [실측] di.dio 는 서버 파싱에 필수 (빈 배열이면 500).
     [실측 2026-11-13] dio 는 이미지 개수와 무관하게 텍스트 1개 + 이미지 1개까지만.
@@ -81,41 +33,14 @@ def build_content_json(text: str, images: "list[UploadedImage] | None" = None) -
     [실측 2026-11-13 브라우저 캡처] 빈 줄 보존: 줄마다 컴포넌트를 만들지 않고
     text 컴포넌트 하나의 value 에 문단 배열로 넣으며, 빈 줄은
     textNode 값이 빈 문자열("" ) 인 문단이 된다.
-    dio 텍스트 항목의 st 는 빈 줄을 건너뛰고 "\n" 으로 잇은 바이트 길이
-    ("첫 줄\\n\\n셋째 줄" -> 18). 빈 줄을 버리면 두 문단으로 저장된다.
+    dio 텍스트 항목의 st 는 빈 줄을 건너뛰고 "
+" 으로 잇은 바이트 길이
+    ("첫 줄\n\n셋째 줄" -> 18). 빈 줄을 버리면 두 문단으로 저장된다.
 
     [실측 2026-11-13 E2E] 줄 -> 문단 1:1 로 저장된다: CRLF/단독 CR/LF 모두 줄바꿈, 빈 줄(연속 포함)은 각각
-    빈 문단(뷰어에서 \\u200b), 공백만 있는 줄은 공백이 그대로 남은 문단. 이모지·& < > " 도 그대로 보존.
-    (공백만 있는 줄을 dio st 계산에서 빈 줄처럼 건너뛰어도 서버는 정상 저장했다.)
+    빈 문단(뷰어에서 \u200b), 공백만 있는 줄은 공백이 그대로 남은 문단. 이모지·& < > " 도 그대로 보존.
+    블록(소제목, 인용, 표, 사진 사이 글 등)이 필요하면 models.blocks.Document 를 쓴다.
     """
-    images = images or []
-    if not text and not images:
-        # dio 가 빈 배열이면 서버가 500 (위 실측) -> 요청 전에 막는다
-        raise ValueError("본문 텍스트나 이미지 중 하나는 있어야 합니다")
-    # CRLF / 단독 CR 모두 줄바꿈으로 본다 (브라우저 입력은 줄바꿈이 \n 뿐 - 단독 \r 이 문단 안에 남지 않게)
-    lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n") if text else []
-    paragraphs = [_paragraph(ln) for ln in lines]
+    from ..models.blocks import Document  # 순환 import 방지
 
-    components: list[dict[str, Any]] = []
-    if paragraphs:
-        components.append(_text_component(paragraphs))
-    components += [_image_component(img, represent=(i == 0)) for i, img in enumerate(images)]
-
-    dio: list[dict[str, Any]] = []
-    if text:
-        joined = "\n".join(ln for ln in lines if ln.strip())
-        dio.append({"dis": "N", "dia": {"t": 0, "p": 0, "st": len(joined.encode("utf-8")), "sk": 1}})
-    if images:
-        dio.append({"dis": "N", "dia": {"t": 0, "p": 0, "st": 0, "sk": 0}})
-
-    doc = {
-        "document": {
-            "version": SE_VERSION,
-            "theme": "default",
-            "language": "ko-KR",
-            "id": ulid(),
-            "di": {"dif": False, "dio": dio},
-            "components": components,
-        }
-    }
-    return json.dumps(doc, ensure_ascii=False, separators=(",", ":"))  # [실측 2026-11-13] 프론트는 compact JSON
+    return Document.from_text(text, images or []).to_json()

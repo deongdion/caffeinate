@@ -24,7 +24,7 @@ classifiers = [
 [project.optional-dependencies]
 # 네이티브 확장 없이(소스 체크아웃/순수 파이썬 설치) 쓸 때: 공식 curl_cffi 로 폴백 (h2 스트림 ID/WINDOW_UPDATE 패리티 없음)
 fallback = ["curl_cffi>=0.16"]
-dev = ["pytest>=8", "ruff>=0.6", "mypy>=1.10"]
+dev = ["pytest>=8", "ruff>=0.6", "mypy>=1.10", "jsonschema>=4"]
 
 [tool.setuptools.dynamic]
 version = { attr = "caffeinate.__version__" }

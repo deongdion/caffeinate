@@ -225,3 +225,42 @@ def test_like_flow_jsonp(monkeypatch: pytest.MonkeyPatch, client: Caffeinate) ->
     assert p["_method"] == "DELETE" and "isPostTimeline" not in p
     assert (p["guestToken"], p["timestamp"]) == ("g", 1794553139177)
     assert p["callback"] == search["params"]["callback"] and p["_"] == search["params"]["_"] + 1
+
+
+def test_block_comment_flow(monkeypatch: pytest.MonkeyPatch, client: Caffeinate) -> None:
+    from caffeinate import Image, Sticker, Text
+
+    calls = _capture(monkeypatch, client, [FakeResp(data={"commentId": 5, "refCommentId": 5})])
+    ref = ArticleRef(cafe_id=1, article_id=2, menu_id=3)
+    img = UploadedImage(url="/h/a.png", path="/h", domain="d", file_name="a.png", width=4, height=3)
+    cid = asyncio.run(client.comments.add(ref, [Text("첫 줄\n둘째"), "셋째", Sticker("cafe_001", 2), Image(img)]))
+    assert cid == 5
+    assert list(calls[0]["data"].items())[:6] == [
+        ("content", "첫 줄\n둘째\n셋째"), ("stickerId", "cafe_001-2-185-160"), ("imagePath", "/h/"),
+        ("imageFileName", "a.png"), ("imageWidth", 4), ("imageHeight", 3),
+    ]
+
+
+def test_block_comment_rejects_locally_without_request(monkeypatch: pytest.MonkeyPatch, client: Caffeinate) -> None:
+    from caffeinate import Divider
+
+    calls = _capture(monkeypatch, client, [])
+    ref = ArticleRef(cafe_id=1, article_id=2, menu_id=3)
+    with pytest.raises(ValueError):
+        asyncio.run(client.comments.add(ref, ""))           # 실측: 서버 403 9999
+    with pytest.raises(TypeError):
+        asyncio.run(client.comments.add(ref, [Divider()]))
+    with pytest.raises(ValueError):
+        asyncio.run(client.comments.add(ref, "가" * 3001))  # 실측: 서버 400
+    assert calls == []
+
+
+def test_sticker_kwarg_and_block_duplicate(monkeypatch: pytest.MonkeyPatch, client: Caffeinate) -> None:
+    from caffeinate import Sticker
+
+    calls = _capture(monkeypatch, client, [FakeResp(data={"commentId": 6, "refCommentId": 6})])
+    ref = ArticleRef(cafe_id=1, article_id=2, menu_id=3)
+    asyncio.run(client.comments.add(ref, sticker_id=Sticker("p", 1)))   # 스티커만
+    assert calls[0]["data"]["content"] == "" and calls[0]["data"]["stickerId"] == "p-1-185-160"
+    with pytest.raises(ValueError):
+        asyncio.run(client.comments.add(ref, [Sticker("p", 1)], sticker_id="p-2-1-1"))
