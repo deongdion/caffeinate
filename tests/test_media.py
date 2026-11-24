@@ -151,8 +151,9 @@ def test_formula_needs_render() -> None:
     assert not f.rendered
     with pytest.raises(ValueError, match="렌더링"):
         f.to_dict()
-    with pytest.raises(ValueError):
-        Formula("  ")
+    tpl = Formula("  ")    # 빈 latex 는 템플릿(AI 채우기)용으로 만들 수 있다
+    with pytest.raises(ValueError, match="렌더링"):
+        tpl.to_dict()
     f.html, f.thumbnail = "<div class='lama-viewer'></div>", Thumbnail(src="https://x/y.png", width=1, height=1)
     assert f.to_dict()["fontSizeCode"] == "fs15"
 
@@ -180,12 +181,12 @@ def test_vote_close_time_and_errors() -> None:
     assert d["closeCondition"] == "time" and d["closeConditionEndTime"] == 1796115600000
     with pytest.raises(ValueError):
         Vote("a", ["x"])
-    with pytest.raises(ValueError):
-        Vote("", ["x", "y"])
+    with pytest.raises(ValueError, match="제목"):
+        Vote("", ["x", "y"]).to_dict()      # 빈 제목은 만들 수 있지만 보낼 수 없다
     with pytest.raises(ValueError):
         Vote("a", ["x", "y"], close_at=datetime(2026, 1, 1, tzinfo=KST), close_voters=3)
-    with pytest.raises(ValueError):
-        VoteItem(" ")
+    with pytest.raises(ValueError, match="항목 이름"):
+        Vote("a", ["x", " "]).to_dict()
 
 
 def test_vote_image_path_is_pending() -> None:
@@ -351,3 +352,16 @@ def test_encode_parts_keeps_order() -> None:
     assert ctype.startswith("multipart/form-data; boundary=")
     i_a, i_f, i_b = body.index(b'name="a"'), body.index(b'name="f"'), body.index(b'name="b"')
     assert i_a < i_f < i_b
+
+
+def test_empty_templates_fill_then_serialize() -> None:
+    """빈 칸 템플릿 (투표·일정·수식) -> fill -> to_dict 가능"""
+    tpl = Document([Vote("", ["", ""]), Schedule("", datetime(2026, 12, 5, 14, tzinfo=KST)), Formula("", hint="이차방정식")])
+    with pytest.raises(ValueError):
+        tpl.to_dict()
+    keys = list(tpl.fill_schema()["properties"])
+    doc = tpl.fill({keys[0]: {"title": "점심", "items": ["김밥", "라면"]},
+                    keys[1]: {"title": "모임", "location": "성수"}, keys[2]: {"latex": "x^2"}})
+    comps = Document(doc.blocks[:2]).to_dict()["document"]["components"]
+    assert comps[0]["data"]["voteName"] == "점심" and comps[1]["data"]["content"] == "모임"
+    assert doc.blocks[2].latex == "x^2" and not doc.blocks[2].rendered

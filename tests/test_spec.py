@@ -303,3 +303,14 @@ def test_spec_font_line_height_and_defaults_roundtrip() -> None:
     jsonschema.validate(spec, Document.json_schema())
     with pytest.raises(SpecError):
         Document.from_spec({"defaults": {"font": "comic"}, "blocks": ["x"]})
+
+
+def test_comment_schema_allows_no_sticker() -> None:
+    jsonschema = pytest.importorskip("jsonschema")
+    from caffeinate import CommentDraft
+
+    s = CommentDraft.json_schema()
+    jsonschema.validate({"text": "글만", "sticker": ""}, s)
+    jsonschema.validate({"text": "a", "sticker": "cafe_001-1-185-160"}, s)
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate({"text": "a", "sticker": "bad"}, s)

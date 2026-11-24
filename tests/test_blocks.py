@@ -514,3 +514,17 @@ def test_document_of_keeps_defaults() -> None:
     out = document_of(doc)
     assert out is not doc and out.defaults == doc.defaults
     assert out.to_dict()["document"]["components"][0]["value"][0]["style"]["lineHeight"] == 2
+
+
+def test_sticker_without_login_uses_measured_packs() -> None:
+    # 움직이는 묶음을 png/normal 로 보내면 "존재하지 않는 스티커" [실측 2026-11-24]
+    d = Sticker("cafe_001", 3).to_dict()
+    assert d["format"] == "animated" and d["thumbnail"]["src"].endswith("/cafe_001/original_3.gif")
+    d = Sticker("cafe_004", 3).to_dict()
+    assert d["format"] == "normal" and d["thumbnail"]["src"].endswith("/cafe_004/original_3.png")
+    assert Sticker.parse("cafe_002-5-185-160").animated is True
+    assert Sticker("unknown_pack", 1).animated is False           # 모르는 묶음은 정지
+    assert Sticker("cafe_001", 1, animated=False).animated is False  # 직접 준 값이 이긴다
+    with pytest.raises(ValueError, match="1~24"):
+        Sticker("cafe_001", 25)
+    assert Sticker.from_dict(Sticker("cafe_001", 3).to_dict()).to_dict()["format"] == "animated"

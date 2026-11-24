@@ -484,6 +484,8 @@ class EditorService(BaseService):
         for f in formulas:
             if f.rendered:
                 continue
+            if not f.latex.strip():
+                raise ValueError("Formula 에는 latex 가 있어야 합니다")
             hit = self._formula_cache.get(_formula_key(f))
             if hit is not None:   # 같은 수식·크기는 다시 렌더하지 않는다 (이미지는 공용 주소)
                 f.html, f.thumbnail, f.font_size, f.font_family = hit

@@ -17,3 +17,6 @@ caffeinate/_curl_cffi/*.dll
 # 로컬 전용 (공개 저장소에 올리지 않음)
 CLAUDE.md
 docs/실측기록.md
+
+# test.py 결과
+test_out/

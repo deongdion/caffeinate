@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from typing import Any, Self, TypeAlias
 
 from ..utils.parsing import as_dict, as_int
-from .blocks import Block, Image, Paragraph, Sticker, Text
+from .blocks import STICKER_PACKS, Block, Image, Paragraph, Sticker, Text
 from .photo import UploadedImage
 
 COMMENT_MAX_BYTES = 6000
@@ -178,8 +178,9 @@ class CommentDraft:
         props: dict[str, Any] = {"text": {"type": "string", "description": hint or
                                           f"댓글 글 (여러 줄 가능, {COMMENT_MAX_BYTES}바이트 이하: 한글 2, 영문·이모지 1)"}}
         if sticker:
-            props["sticker"] = {"type": "string", "pattern": r"^[A-Za-z0-9_]+-\d+-\d+-\d+$",
-                                "description": "스티커 id 'pack-seq-w-h' (cafe.editor.stickers 의 comment_id), 없으면 빈 문자열"}
+            props["sticker"] = {"type": "string", "pattern": r"^(?:[A-Za-z0-9_]+-\d+-\d+-\d+)?$",
+                                "description": "스티커 id 'pack-seq-185-160' (없으면 빈 문자열). 묶음(번호 범위): "
+                                               + ", ".join(f"{k}(1~{n})" for k, (_, n) in STICKER_PACKS.items())}
         return {"$schema": "https://json-schema.org/draft/2020-12/schema", "title": "caffeinate Comment",
                 "type": "object", "additionalProperties": False, "required": ["text"], "properties": props}
 

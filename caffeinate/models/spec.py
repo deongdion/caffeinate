@@ -47,6 +47,7 @@ from ..enums.editor import (
 )
 from ..utils.parsing import as_dict, as_int
 from .blocks import (
+    STICKER_PACKS,
     Block,
     Cell,
     Code,
@@ -426,7 +427,8 @@ def _from_spec(item: JSONDict) -> Block:
         return ImageStrip(imgs, **kw)
     if t == "sticker":
         return Sticker(str(d.get("pack_code") or ""), as_int(d.get("seq")), as_int(d.get("width"), 185),
-                       as_int(d.get("height"), 160), d.get("url") or None, bool(d.get("animated")), **kw)
+                       as_int(d.get("height"), 160), d.get("url") or None,
+                       bool(d["animated"]) if d.get("animated") is not None else None, **kw)
     if t == "link_card":
         th = as_dict(d.get("thumbnail"))
         return LinkCard(str(d.get("url") or ""), str(d.get("title") or ""), "", str(d.get("description") or ""),
@@ -563,7 +565,9 @@ def _defs() -> JSONDict:
         "image_group": _obj("image_group", {"images": {"type": "array", "minItems": 2, "items": image},
                                             "layout": _enum(ImageGroupLayout)}, ["images"]),
         "image_strip": _obj("image_strip", {"images": {"type": "array", "minItems": 2, "items": image}}, ["images"]),
-        "sticker": _obj("sticker", {"pack_code": {"type": "string"}, "seq": {"type": "integer", "minimum": 1},
+        "sticker": _obj("sticker", {"pack_code": {"type": "string", "description": "카페 스티커 묶음 (번호 범위): " + ", ".join(
+                                        f"{k}(1~{n})" for k, (_, n) in STICKER_PACKS.items())},
+                                    "seq": {"type": "integer", "minimum": 1},
                                     "width": {"type": "integer"}, "height": {"type": "integer"},
                                     "animated": {"type": "boolean"}, "url": {"type": "string"}}, ["pack_code", "seq"]),
         "link_card": _obj("link_card", {"url": {"type": "string"}, "title": {"type": "string"},

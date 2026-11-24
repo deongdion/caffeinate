@@ -48,6 +48,14 @@ from .photo import UploadedImage
 CTYPE: str = "@ctype"
 JSONDict: TypeAlias = dict[str, Any]
 STICKER_DOMAIN = "https://storep-phinf.pstatic.net"
+# 카페 기본 스티커 묶음 {packCode: (움직이는지, 개수)} - 모두 185x160, 주소 = original_{seq}.gif|png
+# [실측 2026-11-24 cafe.editor.sticker_packs/stickers 16묶음 전부]. 로그인 없이 Sticker 를 만들 때 쓴다.
+STICKER_PACKS: dict[str, tuple[bool, int]] = {
+    "motion3d_02": (True, 24), "cafe_001": (True, 24), "cafe_002": (True, 24), "cafe_003": (True, 24),
+    "cafe20_002": (False, 28), "cafe20_001": (False, 28), "motion2d_01": (False, 24), "cafe_004": (False, 28),
+    "cafe_005": (False, 26), "cafe_012": (False, 24), "cafe_006": (False, 34), "cafe_007": (False, 20),
+    "cafe_008": (False, 24), "cafe_009": (False, 40), "cafe_010": (False, 40), "cafe_011": (False, 40),
+}
 _COLOR_RE = re.compile(r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$|^rgba?\(\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*\d{1,3}\s*(?:,\s*[\d.]+\s*)?\)$")
 _FONT_SIZES = frozenset(f.value for f in FontSize)
 _FONT_FAMILIES = frozenset(f.value for f in FontFamily)
@@ -831,6 +839,7 @@ class Sticker(Block):
         Document([st])                           # 글
         await cafe.comments.add(ref, "", sticker_id=st)   # 댓글 ("cafe_001-1-185-160")
 
+    로그인 없이 Sticker("cafe_001", 3) 처럼 만들어도 된다 - 카페 기본 묶음(STICKER_PACKS)은 움직임 여부·개수를 안다.
     없는 스티커는 서버가 500 (31021) [실측 2026-11-24].
     """
 
@@ -840,12 +849,18 @@ class Sticker(Block):
     width: int = 185
     height: int = 160
     url: str | None = None                      # 원본 이미지 (비우면 storep-phinf 규칙으로)
-    animated: bool = False
+    animated: bool | None = None                # None = STICKER_PACKS 로 정함 (모르는 묶음은 정지)
     layout: str = "default"
 
     def __post_init__(self) -> None:
         if not self.pack_code or self.seq < 1:
             raise ValueError("Sticker 에는 pack_code 와 1 이상의 seq 가 필요합니다")
+        known = STICKER_PACKS.get(self.pack_code)
+        if self.animated is None:
+            # 움직이는 묶음을 png/normal 로 보내면 저장은 되지만 "존재하지 않는 스티커" 로 보인다 [실측 2026-11-24]
+            self.animated = known[0] if known else False
+        if known and self.url is None and self.seq > known[1]:
+            raise ValueError(f"{self.pack_code} 묶음 스티커는 1~{known[1]} 번입니다: {self.seq}")
 
     @property
     def code(self) -> str:

@@ -338,8 +338,7 @@ class Formula(Block):
     layout: str = "default"
 
     def __post_init__(self) -> None:
-        if not self.latex.strip():
-            raise ValueError("Formula 에는 latex 가 있어야 합니다")
+        # 빈 latex 는 템플릿(AI 채우기)용 - 렌더할 때 막는다
         if isinstance(self.thumbnail, UploadedImage):
             img = self.thumbnail
             self.thumbnail = Thumbnail(src=f"{img.domain}{img.url}", width=img.width, height=img.height)
@@ -880,12 +879,8 @@ def _is_url(v: Any) -> bool:
 class VoteItem:
     """투표 항목 - image: 업로드된 사진 주소(http..) / bytes / 파일 경로 / (bytes, 이름) - 주소가 아니면 작성 때 업로드"""
 
-    name: str
+    name: str = ""                       # 빈 이름은 템플릿(AI 채우기)용 - 보낼 때(to_dict) 검사
     image: Any = None
-
-    def __post_init__(self) -> None:
-        if not self.name.strip():
-            raise ValueError("투표 항목 이름이 비었습니다")
 
 
 @dataclass(slots=True)
@@ -915,8 +910,7 @@ class Vote(Custom):
     writer_id: str | None = None        # 작성 때 채운다 (로그인 아이디)
 
     def __post_init__(self) -> None:
-        if not self.title.strip():
-            raise ValueError("투표 제목이 비었습니다")
+        # 빈 제목·항목 이름은 템플릿(AI 채우기)용으로 허용하고 보낼 때(to_dict) 막는다
         self.items = [i if isinstance(i, VoteItem) else VoteItem(str(i)) for i in self.items]
         if len(self.items) < 2:
             raise ValueError("투표 항목은 2개 이상이어야 합니다")
@@ -932,6 +926,10 @@ class Vote(Custom):
         return [i for i in self.items if i.image is not None and not _is_url(i.image)]
 
     def _data(self) -> JSONDict:
+        if not self.title.strip():
+            raise ValueError("투표 제목이 비었습니다")
+        if any(not i.name.strip() for i in self.items):
+            raise ValueError("투표 항목 이름이 비었습니다")
         if self.pending_images:
             raise ValueError("업로드 안 된 투표 사진이 있습니다 - articles.write 에 넘기면 자동으로 올립니다")
         if self.close_at is not None:
@@ -1050,8 +1048,6 @@ class Schedule(Custom):
     cafe_id: int | None = None          # 작성 때 채운다
 
     def __post_init__(self) -> None:
-        if not self.title.strip():
-            raise ValueError("일정 제목이 비었습니다")
         if self.start is None:
             raise ValueError("Schedule 에는 start(시작 시각)가 필요합니다")
         if self.start.tzinfo is None:
@@ -1066,6 +1062,8 @@ class Schedule(Custom):
             self.location = self.place.name
 
     def _data(self) -> JSONDict:
+        if not self.title.strip():
+            raise ValueError("일정 제목이 비었습니다")
         assert self.start is not None and self.end is not None
         d: JSONDict = {"cafeId": self.cafe_id, "content": self.title, "startDateTimeStamp": _ms(self.start),
                        "endDateTimeStamp": _ms(self.end), "timeZoneId": self.time_zone.time_zone_id,
