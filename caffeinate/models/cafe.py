@@ -2,7 +2,15 @@
 from dataclasses import dataclass, field
 from typing import Any, Self
 
+from ..enums import CafeOpenType
 from ..utils.parsing import JSON, as_dict, as_int, pick
+
+
+def _open_type(value: Any) -> CafeOpenType | None:
+    try:
+        return CafeOpenType(str(value)) if value else None
+    except ValueError:
+        return None
 
 
 @dataclass(slots=True, kw_only=True)
@@ -15,6 +23,11 @@ class Cafe:
     member_count: int = 0
     introduction: str = ""
     image_url: str = ""
+    # homepc myCafe.cafes[].manageCafe [실측 2026-11-24]: 내가 만든(매니저) 카페 True, 멤버로만 가입한 카페 False.
+    # 부매니저/스태프로 있는 카페의 값은 미확인
+    is_manager: bool = False
+    # homepc myCafe.cafes[].openType (O/C/H) [실측 2026-11-24]. 응답에 없거나 모르는 값이면 None
+    open_type: CafeOpenType | None = None
     raw: JSON = field(default_factory=dict, repr=False, compare=False)
 
     @property
@@ -33,5 +46,7 @@ class Cafe:
             member_count=as_int(pick(d, "memberCount", "memberListTotalCount", "cafeMemberCount")),
             introduction=str(pick(d, "introduction", default="")),
             image_url=str(image.get("url", "")) if isinstance(image, dict) else str(image or ""),
+            is_manager=d.get("manageCafe") in (True, "Y", "true"),
+            open_type=_open_type(d.get("openType")),
             raw=d,
         )

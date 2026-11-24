@@ -45,7 +45,7 @@ from pathlib import Path
 from typing import Any
 
 from ..core import fingerprint as fp_mod
-from ..core.config import Settings
+from ..core.config import DEFAULT_SOUND_CAPTCHA_OCR_URL, Settings
 from ..core.cookies import CookieStore
 from ..core.errors import LoginError
 from ..models.cookie import Cookie
@@ -274,7 +274,7 @@ def _classify_state(state: dict[str, Any]) -> str:
 #   -> 정답 입력 후 [id='log.login'] 클릭: 통과하면 URL 에 chp 토큰이 붙고 로그인 폼으로 돌아온다
 #      ("다시 로그인해 주세요." - 자동 모드면 자격증명을 다시 제출한다)
 #   주의: JS 로 값 한 번에 넣거나 synthetic click 은 네이버 감시에 걸린다(무반응). trusted 입력 필수.
-_CAPTCHA_OCR_URL = "http://49.254.163.248:5000/digits"
+_CAPTCHA_OCR_URL = DEFAULT_SOUND_CAPTCHA_OCR_URL
 _CAPTCHA_MAX_ATTEMPTS = 5        # 캡차 해결 재시도 최대 횟수
 _CAPTCHA_OCR_TIMEOUT_MS = 8000   # OCR 서버 1회 대기(ms)
 _SOUND_WAV_URL = "https://soundcaptcha.nid.naver.com/soundCaptchaEn.wav?key={key}&replay={ts}"

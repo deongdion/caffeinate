@@ -27,7 +27,13 @@ PROFILE_DIR_ENV: Final = "CAFFEINATE_PROFILE_DIR"
 
 # 카페 웹 페이지 (Referer 기본값)
 CAFE_SECTION_HOME: Final = "https://section.cafe.naver.com/ca-fe/home"
+CAFE_CREATE_PAGE: Final = "https://section.cafe.naver.com/ca-fe/home/create"  # 카페 만들기 화면
 CAFE_WEB_ORIGIN: Final = "https://cafe.naver.com"
+
+# 캡차 OCR 서버 (사내). 음성: multipart audio(wav) -> {"digits"}, 이미지: multipart image -> {"digits"|"text"}
+# [실측: auth/login.py 음성 캡차, MarketingMinjok cafe_write_normal NaverClient.cs / backlink_normal CaptchaUtils.cs]
+DEFAULT_SOUND_CAPTCHA_OCR_URL: Final = "http://49.254.163.248:5000/digits"
+DEFAULT_IMAGE_CAPTCHA_OCR_URL: Final = "http://49.254.163.243:5002/ocr"
 
 
 def user_data_dir(app: str = "caffeinate") -> Path:
@@ -75,6 +81,11 @@ class Settings:
     comment_retry_max: int = 2                     # 2001 재시도 횟수 (총 시도 = 1 + max)
     comment_retry_delays: tuple[float, ...] = (12.0, 20.0)  # 재시도 직전 대기(초), 부족하면 마지막 값 반복
 
+    # 카페 만들기 캡차 (cafes.create)
+    captcha_max_attempts: int = 5                            # 캡차 풀이 최대 시도 수 (실패마다 서버가 새 키를 준다)
+    sound_captcha_ocr_url: str = DEFAULT_SOUND_CAPTCHA_OCR_URL
+    image_captcha_ocr_url: str = DEFAULT_IMAGE_CAPTCHA_OCR_URL
+
     def __post_init__(self) -> None:
         # Settings(profile_dir="...") 처럼 문자열을 넘겨도 동작하게 (경로 연산자 / 사용)
         self.profile_dir = Path(self.profile_dir).expanduser()
@@ -84,6 +95,8 @@ class Settings:
             raise ValueError("max_retries / max_redirects / comment_retry_max 는 음수일 수 없습니다")
         if self.min_request_interval < 0:
             raise ValueError(f"min_request_interval 은 음수일 수 없습니다: {self.min_request_interval}")
+        if self.captcha_max_attempts < 1:
+            raise ValueError(f"captcha_max_attempts 는 1 이상이어야 합니다: {self.captcha_max_attempts}")
         if self.max_clients < 1:
             raise ValueError(f"max_clients 는 1 이상이어야 합니다: {self.max_clients}")
         self.comment_retry_delays = tuple(self.comment_retry_delays)

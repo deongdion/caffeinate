@@ -61,11 +61,15 @@ ACCEPT_ENCODING: Final = "gzip, deflate, br, zstd"
 ACCEPT_XHR: Final = "application/json, text/plain, */*"   # 카페 프론트(axios) 기본값 [실측 2026-11-13]
 ACCEPT_FETCH: Final = "*/*"                                # fetch() 기본값 [실측 2026-11-13]
 ACCEPT_DOCUMENT: Final = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+# 파이어폭스 미디어 요소(<audio>/<video>) 기본 Accept [추정: 파이어폭스 소스 기본값, Camoufox 실측 전]
+ACCEPT_MEDIA: Final = "audio/webm,audio/ogg,audio/wav,audio/*;q=0.9,application/ogg;q=0.7,video/*;q=0.6,*/*;q=0.5"
 PRIORITY: Final[dict[RequestKind, str | None]] = {
     RequestKind.XHR: None,          # [실측 2026-11-13] 파이어폭스 XMLHttpRequest 는 priority 를 보내지 않는다
     RequestKind.FETCH: "u=4",
     RequestKind.DOCUMENT: "u=0, i",
     RequestKind.SCRIPT: None,       # [실측 2026-11-13 tls.peet.ws] 동적 <script> (JSONP) 도 priority 없음
+    RequestKind.IFRAME: "u=4, i",   # [추정] 파이어폭스 iframe 문서 이동 (Camoufox 실측 전)
+    RequestKind.AUDIO: None,        # [추정] 미디어 요청 (Camoufox 실측 전)
 }
 # [실측 2026-11-13] HTTP/2 HEADERS 프레임 PRIORITY 플래그의 weight (depends_on=0, exclusive=0)
 H2_WEIGHT: Final[dict[RequestKind, int]] = {
@@ -73,6 +77,8 @@ H2_WEIGHT: Final[dict[RequestKind, int]] = {
     RequestKind.FETCH: 22,
     RequestKind.DOCUMENT: 42,
     RequestKind.SCRIPT: 22,         # [실측 2026-11-13 tls.peet.ws]
+    RequestKind.IFRAME: 42,         # [추정] 문서와 같게
+    RequestKind.AUDIO: 22,          # [추정] 하위 리소스와 같게
 }
 TE: Final = "trailers"
 
@@ -244,6 +250,7 @@ def build_headers(fp: Fingerprint, ctx: RequestContext) -> dict[str, str]:
     site = ctx.site or sec_fetch_site(ctx.url, ctx.referer)
     default_accept = {
         RequestKind.XHR: ACCEPT_XHR, RequestKind.FETCH: ACCEPT_FETCH, RequestKind.SCRIPT: ACCEPT_FETCH,
+        RequestKind.AUDIO: ACCEPT_MEDIA,
     }.get(kind, ACCEPT_DOCUMENT)
 
     h: dict[str, str] = {
@@ -281,16 +288,17 @@ def build_headers(fp: Fingerprint, ctx: RequestContext) -> dict[str, str]:
     # 카페 axios 쓰기 요청은 Content-Type -> X-Cafe-Product [실측 2026-11-13 CommentPost/Reply/Delete,
     # editor 글쓰기 UI 캡처]
     author: dict[str, str] = {}
-    if ctype and kind is not RequestKind.DOCUMENT:
+    if ctype and not kind.is_navigation:
         author["content-type"] = ctype
     author.update(custom)
 
     origin = ctx.origin
-    if kind is RequestKind.SCRIPT:
+    if kind.is_no_cors:
         # <script src> 는 no-cors GET 이라 Origin 을 보내지 않는다 [실측 2026-11-13 like 위젯 JSONP 캡처]
+        # <audio src> 도 같은 no-cors 하위 리소스 [실측 2026-11-24 Whale 캡처: Dest audio, Origin 없음]
         h["sec-fetch-site"] = site if site is not SecFetchSite.NONE else SecFetchSite.SAME_ORIGIN
         h["sec-fetch-mode"] = SecFetchMode.NO_CORS
-        h["sec-fetch-dest"] = SecFetchDest.SCRIPT
+        h["sec-fetch-dest"] = SecFetchDest.AUDIO if kind is RequestKind.AUDIO else SecFetchDest.SCRIPT
         origin = None
     elif kind.is_script:
         h["sec-fetch-site"] = site if site is not SecFetchSite.NONE else SecFetchSite.SAME_ORIGIN
@@ -306,9 +314,10 @@ def build_headers(fp: Fingerprint, ctx: RequestContext) -> dict[str, str]:
         h["upgrade-insecure-requests"] = "1"
         h["sec-fetch-site"] = site
         h["sec-fetch-mode"] = SecFetchMode.NAVIGATE
-        if ctx.user_activated:
+        # iframe 안 스크립트 폼 제출은 사용자 활성화가 아니다 [실측 2026-11-24 Whale 캡처: Sec-Fetch-User 없음]
+        if ctx.user_activated and kind is RequestKind.DOCUMENT:
             h["sec-fetch-user"] = "?1"
-        h["sec-fetch-dest"] = SecFetchDest.DOCUMENT
+        h["sec-fetch-dest"] = SecFetchDest.IFRAME if kind is RequestKind.IFRAME else SecFetchDest.DOCUMENT
         # [실측 2026-11-13] 폼 POST 문서 이동은 같은 출처여도 origin 을 보낸다. GET 은 없음.
         if ctx.method.is_safe:
             origin = None

@@ -31,10 +31,27 @@ class RequestKind(StrEnum):
     # <script src> 로드 (jQuery JSONP). like 위젯(route-like.naver.com)이 이 방식이다 [실측 2026-11-13 Camoufox UI 캡처].
     # Accept */*, sec-fetch-dest script / mode no-cors, Origin 없음, priority 없음, h2 weight 22 [실측 2026-11-13 tls.peet.ws]
     SCRIPT = "script"
+    # iframe 안 폼 제출 (문서 이동이지만 sec-fetch-dest iframe). 카페 아이콘 업로더(cafe.upphoto profileUploader)의
+    # 파일 업로드가 이 방식이다 [실측 2026-11-24 Whale 캡처: Sec-Fetch-Mode navigate / Dest iframe, Sec-Fetch-User 없음]
+    IFRAME = "iframe"
+    # <audio src> 미디어 로드. 카페 개설 음성 캡차(soundcaptcha.nid.naver.com)가 이 방식이다
+    # [실측 2026-11-24 Whale 캡처: Sec-Fetch-Mode no-cors / Dest audio, Range: bytes=0-]
+    AUDIO = "audio"
 
     @property
     def is_script(self) -> bool:
-        return self is not RequestKind.DOCUMENT
+        """페이지 JS/하위 리소스 요청인지 (문서 이동이 아님)"""
+        return not self.is_navigation
+
+    @property
+    def is_navigation(self) -> bool:
+        """문서 이동(최상위 문서 또는 iframe)인지"""
+        return self in (RequestKind.DOCUMENT, RequestKind.IFRAME)
+
+    @property
+    def is_no_cors(self) -> bool:
+        """Origin 없이 보내는 no-cors 하위 리소스 요청인지 (<script>, <audio>)"""
+        return self in (RequestKind.SCRIPT, RequestKind.AUDIO)
 
 
 class SecFetchSite(StrEnum):
@@ -54,6 +71,8 @@ class SecFetchDest(StrEnum):
     EMPTY = "empty"
     DOCUMENT = "document"
     SCRIPT = "script"
+    IFRAME = "iframe"
+    AUDIO = "audio"
 
 
 class ReferrerPolicy(StrEnum):

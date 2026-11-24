@@ -199,12 +199,14 @@ class CafeSession:
         timeout: float | None = None,
         credentials: bool = True,
         referrer_policy: ReferrerPolicy | None = None,
+        user_activated: bool = True,
     ) -> Response:
         """브라우저와 같은 모양으로 요청 1회 (리다이렉트는 직접 따라감)
 
         - referer         : 요청을 일으킨 페이지 URL (전체). Referer 값은 그 페이지 정책으로 계산
         - referrer_policy : 그 페이지의 Referrer-Policy (None: 네이버 페이지 unsafe-url, 그 외 파이어폭스 기본)
         - credentials=False: fetch(credentials: 'omit') 처럼 쿠키를 보내지도 저장하지도 않는다
+        - user_activated=False: 스크립트가 일으킨 문서 이동 (location.href 등) - Sec-Fetch-User 를 보내지 않는다
         """
         method = HttpMethod(str(method).upper())
         session = self._ensure_session()
@@ -245,6 +247,7 @@ class CafeSession:
                 extra=extra,
                 cookie=self.cookies.header_for(full_url) if credentials else None,
                 site=site,
+                user_activated=user_activated,
             )
             started = time.perf_counter()
             wire: list[tuple[str, str | None]] = list(wire_headers(build_headers(self.fingerprint, ctx)))
@@ -382,7 +385,7 @@ def form_encode(data: dict[str, Any], kind: RequestKind = RequestKind.XHR) -> st
     [실측 2026-11-13 CommentPost/CommentReply UI 캡처: content=hdr%20test%20c2]. 같은 값이라도 공백이
     `+` 면 본문과 content-length 가 달라진다. 문서 이동(HTML 폼 제출)은 공백 `+` (WHATWG 폼 인코딩).
     """
-    if kind is RequestKind.DOCUMENT:
+    if kind.is_navigation:
         return urlencode(data)
     return urlencode(data, quote_via=quote, safe="!~*'()")
 

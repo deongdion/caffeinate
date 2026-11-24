@@ -44,6 +44,75 @@ LIKE_ROUTE_SEARCH: Final = f"{LIKE_ROUTE}/v1/search/contents"
 # ---- 내 카페 목록 폴백 [실측] 레거시 GNB (cp949 HTML) ----
 MY_CAFE_GNB: Final = "https://cafe.naver.com/MyCafeListGNBView.nhn"
 
+# ---- 카페 만들기 [실측 2026-11-24 Whale 캡처, section.cafe.naver.com/ca-fe/home/create] ----
+# 모두 apis.naver.com XHR(axios), X-Cafe-Product: pc, Referer = 카페 만들기 화면.
+#   GET  view/creations            -> 주제 목록 + 캡차 키(csKey/soundCaptchaKey) + clubTempId + alimCode
+#   GET  CafeUrlGenerate.json      -> 무작위 카페 주소 {cafeUrl} (프론트 "자동 생성")
+#   POST validation/{field}        -> {validationResult} (cafeName/cafeUrl/introduction/keyword, 캡차는 imageCaptcha/
+#                                     soundCaptcha + svcCode=cafecreate. 오답이면 INVALIDCHARACTER + 새 csKey [실측])
+#   GET  directories/{id}/sub-directories -> 주제 소분류
+#   POST v2/create-cafes           -> {result: "SUCCESS", clubUrl}
+_CAFE_HOME: Final = f"{APIS}/cafe-home-web/cafe-home"
+CAFE_CREATION_VIEW: Final = f"{_CAFE_HOME}/v1/view/creations"
+CAFE_URL_GENERATE: Final = f"{APIS}/cafe-web/cafe2/CafeUrlGenerate.json"
+CAFE_CREATE: Final = f"{_CAFE_HOME}/v2/create-cafes"
+# 카페 아이콘 업로더 (팝업): PhotoUpload.nhn 이 upphoto 세션키 URL 로 JS 이동 -> profileUploader 화면
+#   -> upload/0 (iframe 폼, multipart callback_func + image) -> modify (XML 명령) -> save/0 (XML <item>) -> finish
+CAFE_ICON_UPLOADER: Final = "https://up.cafe.naver.com/PhotoUpload.nhn"
+CAFE_ICON_DOMAIN: Final = "https://cafethumb.pstatic.net"  # 프론트가 아이콘 미리보기에 붙이는 도메인 [번들]
+# 음성 캡차 음원. 화면은 soundCaptcha.wav(한국어)를 재생하지만 OCR 서버는 영어 숫자 음원(En)을 받는다
+# [실측 2026-11-24] 카페 개설 키(soundCaptchaKey)로도 En 음원(200, audio/x-wav ~340KB)이 오고, OCR 답이 첫 시도에 통과
+SOUND_CAPTCHA_WAV: Final = "https://soundcaptcha.nid.naver.com/soundCaptchaEn.wav"
+
+
+# 지역 선택 [실측 2026-11-24]: result[] {rcodeType DOMESTIC|OVERSEAS, rcode, name, regionName1.., regionCode1..}
+#   국내 시/도 "06"(대구) -> 시/군/구 "06290"(달서구), 해외 "A1017"(아시아). create-cafes 의 rcode 에 이 값을 보낸다.
+_CAFE_ADD: Final = f"{APIS}/cafe-web/cafe-add-api"
+# 카페 관리 설정 조회 [실측 2026-11-24]: result {cafe{openType, enableRealName, introduction..}, theme{themeDir1Id,
+#   themeDir2Id}, region{regionCodeDetail?}, cafeKeywordList[]..} (매니저만)
+_CAFE_MANAGE: Final = f"{APIS}/cafe-web/cafe-manage-api"
+
+
+def cafe_regions(parent: str | None = None, *, overseas: bool = False) -> str:
+    """지역 목록 - parent 없으면 최상위 (시/도 또는 해외 대륙)"""
+    base = f"{_CAFE_ADD}/v1.0/cafe-region" + ("/overseas" if overseas else "")
+    return f"{base}/{parent}/child" if parent else f"{base}/root"
+
+
+def cafe_manage(cafe_id: int) -> str:
+    return f"{_CAFE_MANAGE}/v1/cafes/{cafe_id}/manage"
+
+
+def cafe_validation(field: str) -> str:
+    """카페 만들기 입력 검증 (field: CafeFormField / CaptchaType 값)"""
+    return f"{_CAFE_HOME}/v1/validation/{field}"
+
+
+def cafe_sub_directories(dir_id: int) -> str:
+    """주제 소분류 -> result.directories[{directoryId, directoryName}]"""
+    return f"{_CAFE_HOME}/v1/directories/{dir_id}/sub-directories"
+
+
+def icon_uploader_page(session_key: str) -> str:
+    return f"{UPPHOTO}/{session_key}/profileUploader"
+
+
+def icon_upload(session_key: str) -> str:
+    return f"{UPPHOTO}/{session_key}/upload/0"
+
+
+def icon_modify(session_key: str) -> str:
+    return f"{UPPHOTO}/{session_key}/modify"
+
+
+def icon_save(session_key: str) -> str:
+    return f"{UPPHOTO}/{session_key}/save/0"
+
+
+def icon_finish(session_key: str) -> str:
+    return f"{UPPHOTO}/{session_key}/finish"
+
+
 # ---- 에디터/사진 [실측 2026-11-12] ----
 EDITOR: Final = "https://apis.cafe.naver.com/editor"
 PHOTO_SESSION_KEY: Final = "https://platform.editor.naver.com/api/cafepc001/v1/photo-uploader/session-key"

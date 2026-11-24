@@ -1,4 +1,4 @@
-"""카페: 내 카페 목록, 카페 식별자 해석"""
+"""카페: 내 카페 목록, 카페 식별자 해석, 카페 만들기 (cafe_create.CafeCreationMixin)"""
 import asyncio
 import re
 
@@ -8,6 +8,7 @@ from ..core.errors import CafeNotFoundError, CaffeinateError, NaverAPIError, Par
 from ..models import Cafe
 from ..utils.parsing import JSON, as_list, dig, is_ascii_digits, parse_cafe_url
 from .base import BaseService, CafeLike
+from .cafe_create import CafeCreationMixin
 
 _RE_SLUG = re.compile(r"^[A-Za-z0-9_-]+$")
 _RE_CLUBID = (
@@ -21,8 +22,8 @@ _RE_GNB_ITEM = re.compile(
 )
 
 
-class CafeService(BaseService):
-    """카페 단위 기능: 내 카페 목록, slug/URL -> 카페 ID 해석 (`cafe.cafes`)"""
+class CafeService(CafeCreationMixin, BaseService):
+    """카페 단위 기능: 내 카페 목록, slug/URL -> 카페 ID 해석, 카페 만들기 (`cafe.cafes`)"""
 
     _slug_lock: asyncio.Lock | None = None
 

@@ -9,12 +9,16 @@
     │   └── RateLimitedError        요청 제한: 댓글 연속 등록 (2001), 재시도 후에도 HTTP 429
     ├── NetworkError                재시도 후에도 실패한 연결/타임아웃
     ├── ParseError (ValueError)     URL/식별자/응답 해석 실패
-    └── LoginError                  브라우저 로그인 흐름 실패
+    ├── LoginError                  브라우저 로그인 흐름 실패
+    ├── CafeValidationError (ValueError)  카페 만들기 입력 검증 실패 (field / result)
+    └── CaptchaError                캡차를 풀지 못함 (카페 만들기)
 
 각 예외는 `hint` 속성(해결 방법 안내, 없으면 None)을 가진다. str(e) 에도 붙어 나온다.
 NaverAPIError 하위 클래스는 서버 에러 코드/HTTP 상태로 고른다 (`api_error_class`, 표 `ERROR_CODES` /
 `ERROR_STATUSES`). 모두 NaverAPIError 이므로 기존 `except NaverAPIError` / `e.code` 검사는 그대로 동작한다.
 """
+
+from typing import ClassVar
 
 LOGIN_HINT = (
     "로그인 쿠키가 없거나 만료되었습니다. "
@@ -132,3 +136,36 @@ class ParseError(CaffeinateError, ValueError):
 
 class LoginError(CaffeinateError):
     """브라우저 로그인 흐름 실패 (브라우저 없음, 자격증명 오류, 보호조치, 시간 초과 등)"""
+
+
+class CafeValidationError(CaffeinateError, ValueError):
+    """카페 만들기 입력 검증 실패 - 로컬 검사(길이/문자) 또는 서버 validation API 결과
+
+    - field : 문제가 된 입력 (CafeFormField 값 문자열: "cafeName", "cafeUrl", "introduction", "keyword")
+    - value : 그 입력값
+    - result: ValidationResult 값 문자열 ("DUPLICATED", "INVALIDCHARACTER", "PROHIBITWORD", "BYTE", "ISEMPTY" ...)
+    """
+
+    _HINTS: ClassVar[dict[str, str]] = {
+        "DUPLICATED": "이미 쓰이는 값입니다. 다른 이름/주소를 쓰세요 (주소를 비워 두면 무작위 주소를 받습니다).",
+        "INVALIDCHARACTER": "카페 주소는 영문과 숫자만 쓸 수 있습니다 (- 와 _ 도 안 됨).",
+        "PROHIBITWORD": "금칙어가 들어 있습니다.",
+        "BYTE": "길이 제한을 넘었습니다 (한글 등은 2바이트로 셉니다).",
+        "ISEMPTY": "빈 값은 쓸 수 없습니다.",
+    }
+
+    def __init__(self, message: str, *, field: str, value: str, result: str) -> None:
+        super().__init__(message)
+        self.field = field
+        self.value = value
+        self.result = result
+        self.hint = self._HINTS.get(result)
+
+
+class CaptchaError(CaffeinateError):
+    """카페 만들기 캡차를 정해진 횟수 안에 풀지 못함"""
+
+    hint = (
+        "캡차 OCR 서버 상태를 확인하거나 Settings(captcha_max_attempts=...) 를 늘리세요. "
+        "직접 풀려면 create(..., captcha_solver=...) 에 함수(세션, CaptchaChallenge -> 답)를 넘기세요."
+    )

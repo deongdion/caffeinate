@@ -144,8 +144,14 @@ async with await Caffeinate.login() as cafe:
 
 | 서비스 | 메서드 | 설명 |
 |---|---|---|
-| `cafes` | `my_cafes()` | 내가 가입한 카페 목록 |
+| `cafes` | `my_cafes()` | 내가 가입한 카페 목록 (`Cafe.is_manager`: 운영 카페 여부) |
 | | `resolve_id(cafe)` | slug/URL → 숫자 카페 ID |
+| | `create(options, icon=)` | 카페 만들기 → `CreatedCafe` ([카페 만들기](#카페-만들기)) |
+| | `validate(field, value)` / `is_url_available(url)` | 이름·주소·소개·키워드 서버 검증 |
+| | `random_url()` / `sub_directories(theme)` / `creation_info()` | 무작위 주소, 주제 소분류, 개설 화면 정보 |
+| | `upload_icon(image)` | 카페 아이콘 업로드 (보통은 `create(icon=)` 로 자동) |
+| | `regions(parent=, overseas=)` | 카페 지역 목록 (`Region.code` → `region_code`) |
+| | `manage_info(cafe)` | 내가 운영하는 카페의 설정 (공개 유형, 실명 가입, 주제, 지역, 키워드) |
 | `boards` | `all(cafe)` | 게시판 목록 (폴더·구분선 제외) |
 | | `articles(cafe, menu, page=, sort_by=)` | 글 목록 한 페이지 (`ArticlePage`) |
 | | `iter_articles(cafe, menu, limit=)` | 글을 페이지 넘기며 하나씩 (async for) |
@@ -166,6 +172,46 @@ async with await Caffeinate.login() as cafe:
 | | `my_info(cafe)` | 내 닉네임·등급·활동 통계 |
 | | `membership(cafe)` / `grade(cafe)` | 가입 여부 / 등급 |
 | `photos` | `upload(cafe, menu, data)` / `upload_many(...)` | 글쓰기용 이미지 업로드 (보통은 `images=` 로 자동) |
+
+### 카페 만들기
+
+```python
+from caffeinate import CafeCreateOptions, CafeOpenType, ThemeDirectory
+
+opts = CafeCreateOptions(
+    name="온울", url="onoulapp",                       # url 을 빼면 서버가 무작위 주소를 준다
+    theme=ThemeDirectory.TRAVEL, sub_theme=192,         # sub_theme 을 빼면 대분류의 첫 소분류
+    introduction="패키지, 항공권, 숙소 B2B서비스",
+    keywords=["패키지", "항공권", "숙소"],
+)
+created = await cafe.cafes.create(opts, icon="icon.png")
+print(created.link, created.cafe_id)
+# 간단히: await cafe.cafes.create(name="온울")
+```
+
+| 옵션 | 기본값 | 서버 값 | 근거 |
+|---|---|---|---|
+| `name` | (필수) | `clubName` | 60바이트 이하 (한글 2바이트) |
+| `url` | `None` → 무작위 주소 | `clubUrl` | 영문 소문자+숫자, 20바이트 이하, `-` `_` 불가 [실측] |
+| `theme` | `ThemeDirectory.LIFE` (생활) | `currentThemeDir` | |
+| `sub_theme` | `None` → 첫 소분류 | `currentThemeDir2` | `sub_directories(theme)` |
+| `introduction` | `None` → 카페 이름 | `introduction` | 100바이트 이하 |
+| `keywords` | `()` | `keywords` | 최대 10개, 각 20바이트 |
+| `open_type` | `CafeOpenType.OPEN` | `openType` | `O` 공개+바로가입 / `C` 승인 가입 / `H` 비공개 [실측] |
+| `use_real_name` | `False` | `useName` `N` | 바로가입(`OPEN`)에선 불가 |
+| `open_member_list` | `False` | `openMemberList` | 화면 기본값 |
+| `region_code` | `None` (생략) | `rcode` | 공개 카페만. `regions()` 의 코드 (`"06290"` 대구 달서구) [실측] |
+| `agree_to_privacy_policy` | `True` | `agreeToPrivacyPolicy` | |
+| — | 개설 화면 값 | `agreeToTerms`, `clubTempId`, `alimCode`, `groupId=999` | 프론트와 같게 자동 |
+
+- 비공개(`HIDDEN`) 카페는 서버가 주제·소개를 저장하지 않는다 [실측].
+- 만든 결과는 `manage_info(created.cafe_id)` 로 확인할 수 있다.
+- 흐름: 화면 정보 → (주소 생성) → 입력 검증 → 소분류 → 아이콘 → 음성 캡차 → 생성 → 카페 ID 조회.
+  검증에서 걸리면 캡차 전에 `CafeValidationError(field, result)` 로 멈춘다.
+- 캡차는 기본으로 음성 캡차를 OCR 서버(`Settings.sound_captcha_ocr_url`)로 푼다. 틀리면 서버가 준 새 키로
+  `Settings.captcha_max_attempts`(5)번까지, 그래도 안 되면 `CaptchaError`. 직접 풀려면 `captcha_solver=` 에
+  `async (session, CaptchaChallenge) -> str` 함수를 넘긴다. 이미지 캡차는 OCR 서버가 읽지 못해서
+  (`ImageCaptchaOcr` 실측 실패) 사람이 푸는 함수에 `captcha_type = CaptchaType.IMAGE` 를 붙여 쓴다.
 
 **동기 코드에서** 쓰려면 `caffeinate.run()` 을 씁니다.
 
@@ -267,6 +313,10 @@ except PermissionDeniedError as e:
 | 댓글 연속 등록 | 두 번째부터 2001 오류. 약 12초 뒤 다시 보내면 성공 (자동 재시도) |
 | 글 정렬 | 서버가 실제로 적용하는 값은 `TIME`(최신순), `LIKE`(좋아요순) 두 가지 |
 | 비회원이 보는 조회수 | `"4만"` 같은 표시 문자열로 옴 |
+| 카페 주소 검증 | 짧은 주소(`o`, `oi`)도 `DUPLICATED`, `-` `_` 는 `INVALIDCHARACTER` |
+| 카페 만들기 캡차 | 오답이면 `INVALIDCHARACTER` + 새 `csKey`. 통과한 키·답을 `create-cafes` 에 그대로 다시 보냄 |
+| 카페 만들기 검증 길이 | 서버 검증은 길이를 보지 않음 (긴 이름도 `CLEAR`) → 로컬에서 바이트 검사 |
+| homepc 내 카페 | `manageCafe`(내가 만든 카페 true), `openType`(O/C/H) 이 옴 → `Cafe.is_manager`, `Cafe.open_type` |
 
 ---
 
@@ -325,6 +375,12 @@ mypy caffeinate
 ---
 
 ## 변경 사항
+
+### 미배포
+
+- 카페 만들기 `cafes.create()` (아이콘 업로드, 음성 캡차 OCR 자동 풀이, 입력 검증)
+- `Cafe.is_manager` (homepc `manageCafe`)
+- `RequestKind.IFRAME` / `RequestKind.AUDIO` 헤더 (iframe 폼 제출, `<audio>` 미디어 요청)
 
 ### 0.4.0
 
