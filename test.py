@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -45,6 +46,7 @@ from caffeinate import (
     TextStyle,
     Vote,
 )
+from caffeinate.models.spec import fill_keys
 
 KST = timezone(timedelta(hours=9))
 OUT = Path(__file__).with_name("test_out")
@@ -81,40 +83,58 @@ def ask_claude(prompt: str, schema: dict[str, Any], model: str) -> Any:
     sent = {k: v for k, v in schema.items() if k != "$schema"}
     cmd = [exe, "-p", prompt, "--output-format", "json", "--json-schema", json.dumps(sent, ensure_ascii=False),
            "--model", model, "--no-session-persistence", "--tools", ""]
-    r = subprocess.run(cmd, capture_output=True, timeout=600, check=False)
+    try:
+        r = subprocess.run(cmd, capture_output=True, timeout=600, check=False)
+    except subprocess.TimeoutExpired:
+        sys.exit("claude 응답이 600초 안에 오지 않았습니다")
     out = r.stdout.decode("utf-8", "replace")
+    err = r.stderr.decode("utf-8", "replace")[:500]
     try:
         res = json.loads(out)
     except ValueError:
-        sys.exit(f"claude 응답을 읽지 못했습니다 (exit {r.returncode}):\n{out[:500]}\n{r.stderr.decode('utf-8', 'replace')[:500]}")
+        sys.exit(f"claude 응답을 읽지 못했습니다 (exit {r.returncode}):\n{out[:500]}\n{err}")
+    if not isinstance(res, dict):
+        sys.exit(f"claude 응답 형식이 다릅니다 (exit {r.returncode}): {out[:300]}")
     if res.get("is_error") or "structured_output" not in res:
         sys.exit(f"claude 오류: {res.get('subtype')} {str(res.get('result'))[:300]}")
     return res["structured_output"]
 
 
-def dummy(schema: dict[str, Any], defs: dict[str, Any] | None = None) -> Any:
-    """스키마만 보고 가짜 값을 만든다 (AI 없이 흐름 확인용)"""
-    defs = defs if defs is not None else schema.get("$defs", {})
+def dummy(schema: dict[str, Any]) -> Any:
+    """스키마만 보고 가짜 값을 만든다 (AI 없이 흐름 확인용). 선택 칸도 채우고, 만든 값은 스키마로 다시 검사한다"""
+    value = _dummy(schema, schema.get("$defs", {}))
+    jsonschema.validate(value, schema)
+    return value
+
+
+def _dummy(schema: dict[str, Any], defs: dict[str, Any]) -> Any:
     if "$ref" in schema:
-        return dummy(defs[schema["$ref"].rsplit("/", 1)[-1]], defs)
-    if "anyOf" in schema:
-        return dummy(schema["anyOf"][0], defs)
+        return _dummy(defs[schema["$ref"].rsplit("/", 1)[-1]], defs)
+    if "const" in schema:
+        return schema["const"]
+    for key in ("anyOf", "allOf", "oneOf"):
+        if key in schema:
+            return _dummy({**schema[key][0], **{k: v for k, v in schema.items() if k != key}}, defs)
     t = schema.get("type")
     if t == "object":
-        return {k: dummy(v, defs) for k, v in schema.get("properties", {}).items()
-                if k in schema.get("required", list(schema.get("properties", {})))}
+        return {k: _dummy(v, defs) for k, v in schema.get("properties", {}).items()}
     if t == "array":
+        if "prefixItems" in schema:
+            return [_dummy(s, defs) for s in schema["prefixItems"]]
         n = schema.get("minItems", 1)
-        return [dummy(schema.get("items", {"type": "string"}), defs) for _ in range(n)]
+        return [_dummy(schema.get("items", {"type": "string"}), defs) for _ in range(n)]
     if "enum" in schema:
         return schema["enum"][0]
     if t in ("integer", "number"):
         return schema.get("minimum", 1)
     if t == "boolean":
         return False
-    if "pattern" in schema:
+    if "pattern" in schema and re.fullmatch(schema["pattern"], STICKERS[0]):   # 스티커 id 칸
         return STICKERS[0]
-    return f"가짜 {schema.get('description', '값')[:20]}"
+    if "pattern" in schema:
+        raise ValueError(f"dummy 가 이 pattern 의 값을 만들 줄 모릅니다: {schema['pattern']}")
+    text = f"가짜 {schema.get('description', '값')}"
+    return text[: schema.get("maxLength", 20)]
 
 
 # ---------------------------------------------------------------- 실행
@@ -124,6 +144,14 @@ def save(name: str, data: Any) -> Path:
     p = OUT / name
     p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     return p
+
+
+def check_schema(data: Any, schema: dict[str, Any], what: str) -> None:
+    try:
+        jsonschema.validate(data, schema)
+    except jsonschema.ValidationError as e:
+        check(False, f"{what} - {e.message}")
+    check(True, what)
 
 
 def check(cond: bool, what: str) -> None:
@@ -143,8 +171,7 @@ def run_article(fill_ai: Any) -> None:
     data = fill_ai("카페 커뮤니티에 올릴 게시글 내용을 스키마 칸에 맞춰 한국어로 채워줘. "
                    "각 칸의 description 을 따르고, 빈 문자열 없이 자연스럽게.", schema)
     save("article_ai.json", data)
-    jsonschema.validate(data, schema)
-    check(True, "AI 응답이 fill 스키마에 맞음")
+    check_schema(data, schema, "AI 응답이 fill 스키마에 맞음")
 
     doc = tpl.fill(data)          # 같은 구조·id·모양·서식에 내용만 채운 새 문서 (strict: 칸 누락·초과면 오류)
     spec = doc.to_spec(ids=True)
@@ -156,12 +183,20 @@ def run_article(fill_ai: Any) -> None:
     # 구조 유지
     check([type(b) for b in doc.blocks] == [type(b) for b in tpl.blocks], "블록 종류·순서 그대로")
     check([b.id for b in doc.blocks] == [b.id for b in tpl.blocks], "블록 id 그대로")
-    check(tpl.blocks[0].content[0].text == "", "템플릿 원본은 바뀌지 않음")
-    check(doc.blocks[0].content[0].text == data["0_heading"]["content"], "제목이 AI 값으로 채워짐")
-    check(len(doc.blocks[5].items) == 3 and all(i.name for i in doc.blocks[5].items), "투표 항목 3개 채워짐")
-    check(content["document"]["components"][1]["value"][0]["style"]["lineHeight"] == 1.8, "블록 기본 서식 유지")
-    check(content["document"]["components"][0]["title"][0]["nodes"][0]["style"]["fontFamily"] == "nanumsquare",
-          "문서 기본 서식(서체) 유지")
+    # 위치를 숫자로 박지 않고 종류로 찾는다 (템플릿 순서를 바꿔도 그대로 돈다)
+    def at(kind: type) -> int:
+        return next(i for i, b in enumerate(tpl.blocks) if isinstance(b, kind))
+
+    def key(kind: type) -> str:
+        return next(k for k, i in fill_keys(tpl) if i == at(kind))
+
+    h, t, v = at(Heading), at(Text), at(Vote)
+    comps = content["document"]["components"]
+    check(tpl.blocks[h].content[0].text == "", "템플릿 원본은 바뀌지 않음")
+    check(doc.blocks[h].content[0].text == data[key(Heading)]["content"], "제목이 AI 값으로 채워짐")
+    check(len(doc.blocks[v].items) == 3 and all(i.name for i in doc.blocks[v].items), "투표 항목 3개 채워짐")
+    check(comps[t]["value"][0]["style"]["lineHeight"] == 1.8, "블록 기본 서식 유지")
+    check(comps[h]["title"][0]["nodes"][0]["style"]["fontFamily"] == "nanumsquare", "문서 기본 서식(서체) 유지")
 
     # 저장한 JSON 을 다시 읽어 같은 문서가 되는지
     back = Document.from_dict(json.loads(cp.read_text(encoding="utf-8")))
@@ -176,8 +211,7 @@ def run_comment(fill_ai: Any) -> None:
     save("comment_schema.json", schema)
     data = fill_ai(f"카페 게시글에 달 댓글을 스키마에 맞춰 채워줘. 스티커는 다음 중 하나: {', '.join(STICKERS)}", schema)
     save("comment_ai.json", data)
-    jsonschema.validate(data, schema)
-    check(True, "AI 응답이 댓글 스키마에 맞음")
+    check_schema(data, schema, "AI 응답이 댓글 스키마에 맞음")
 
     draft = CommentDraft.from_spec(data)
     form = draft.to_dict()
@@ -195,6 +229,8 @@ def main() -> None:
     ap.add_argument("--model", default="sonnet")
     ap.add_argument("--dummy", action="store_true", help="AI 없이 가짜 값")
     a = ap.parse_args()
+    for stream in (sys.stdout, sys.stderr):   # 콘솔이 cp949 등이어도 한글·기호가 깨지거나 죽지 않게
+        stream.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
     OUT.mkdir(exist_ok=True)
 
     def fill_ai(prompt: str, schema: dict[str, Any]) -> Any:

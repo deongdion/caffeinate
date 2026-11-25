@@ -528,3 +528,32 @@ def test_sticker_without_login_uses_measured_packs() -> None:
     with pytest.raises(ValueError, match="1~24"):
         Sticker("cafe_001", 25)
     assert Sticker.from_dict(Sticker("cafe_001", 3).to_dict()).to_dict()["format"] == "animated"
+
+
+def test_review_fixes_blocks() -> None:
+    """리뷰: 댓글 사진, 서버 서식 값 보존, RawBlock 대체, represent·extra 불변, 기본 레이아웃, 스티커 format, 비교"""
+    from caffeinate import CommentDraft, Document, Image, ImageGroupLayout, LinkCardLayout, Span, Sticker, Text
+    from caffeinate.models.blocks import Block, ParagraphDefaults, RawBlock, TextStyle
+
+    for v in ("a.png", b"x", (b"x", "a.png")):
+        d = CommentDraft.of(CommentDraft("hi", image=v))
+        assert (d.text, d.image) == ("hi", v)
+    for st in ({"fontColor": "transparent"}, {"backgroundColor": "#ff000080"}, {"fontSizeCode": ["x"]}):
+        sp = Span.from_dict({"id": "a", "value": "a", "style": {**st, "@ctype": "nodeStyle"}})
+        assert sp.to_dict()["style"] == {**st, "@ctype": "nodeStyle"}
+    doc = Document.from_dict({"document": {"components": [
+        {"id": "s", "@ctype": "sticker", "packCode": "cafe_001", "seq": 1, "format": "gif"}, {"id": "x", "@ctype": "sticker"}]}})
+    assert isinstance(doc.blocks[1], RawBlock) and doc.blocks[0].to_dict()["format"] == "gif"
+    two = [{"@ctype": "image", "src": "https://x/a.png", "path": "/a.png", "domain": "https://x", "fileName": "a.png",
+            "width": 1, "height": 1, "fileSize": 1}] * 2
+    assert Block.from_dict({"@ctype": "imageGroup", "images": two}).layout == ImageGroupLayout.SLIDE
+    assert Block.from_dict({"@ctype": "oglink", "link": "https://a"}).layout == LinkCardLayout.LARGE_IMAGE
+
+    img = Image("https://x/a.png", represent=False)
+    ext = [{"id": "p", "nodes": [], "@ctype": "paragraph"}]
+    with pytest.raises(ValueError):
+        Document([img]).to_dict()   # 업로드 안 된 사진 - 직렬화가 실패해도 represent 는 원래대로
+    assert img.represent is False
+    Document([Text("a", extra={"value": ext})], defaults=ParagraphDefaults(style=TextStyle(bold=True))).to_dict()
+    assert "style" not in ext[0]
+    assert Sticker.parse("cafe_001-1-185-160") == Sticker.parse("cafe_001-1-185-160")

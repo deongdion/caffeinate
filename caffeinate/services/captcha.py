@@ -26,6 +26,7 @@ from collections.abc import Awaitable, Callable
 from typing import Protocol
 
 from ..core.config import CAFE_CREATE_PAGE
+from ..core.errors import NetworkError
 from ..core.session import CafeSession
 from ..enums import CaptchaType, RequestKind
 from ..models import CaptchaChallenge
@@ -60,9 +61,13 @@ def _clean_answer(value: object) -> str | None:
 async def _post_ocr(session: CafeSession, url: str, part: FilePart) -> dict[str, object]:
     """OCR 서버로 파일 1개 전송 -> JSON dict (네이버 쿠키/Referer 없이)"""
     content_type, body = encode_multipart([part])
-    resp = await session.post(
-        url, data=body, headers={"content-type": content_type}, kind=RequestKind.FETCH, credentials=False,
-    )
+    try:
+        resp = await session.post(
+            url, data=body, headers={"content-type": content_type}, kind=RequestKind.FETCH, credentials=False,
+        )
+    except NetworkError as e:  # OCR 서버가 죽어도 재시도 -> 끝내 못 풀면 CaptchaError
+        logger.debug("캡차 OCR 연결 실패: %s", e)
+        return {}
     if resp.status_code != 200:
         logger.debug("캡차 OCR HTTP %s", resp.status_code)
         return {}

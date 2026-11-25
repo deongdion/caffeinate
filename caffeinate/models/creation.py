@@ -88,6 +88,8 @@ class CafeCreateOptions:
         if self.introduction is not None:
             self.introduction = self.introduction.strip()
         self.open_type = CafeOpenType(self.open_type)
+        if isinstance(self.keywords, str):  # "항공권" 이 글자 단위로 쪼개지지 않게
+            self.keywords = (self.keywords,)
         # 공백 제거 + 빈 값 제거 + 중복 제거 (순서 유지)
         self.keywords = tuple(dict.fromkeys(k.strip() for k in self.keywords if k and k.strip()))
         self.check()

@@ -105,7 +105,8 @@ class CommentDraft:
         """
         if isinstance(body, CommentDraft):
             parts: list[Any] = [*([body.text] if body.text else []), *([body.sticker] if body.sticker else []),
-                                *([body.image] if body.image is not None else [])]
+                                *([body.image if isinstance(body.image, Image | UploadedImage) else _ImageInput(body.image)]
+                                  if body.image is not None else [])]
             extra = dict(body.extra)
         elif isinstance(body, str | Block):
             parts, extra = ([body] if body != "" else []), {}

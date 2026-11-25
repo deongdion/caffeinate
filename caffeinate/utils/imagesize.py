@@ -13,6 +13,9 @@ def image_size(data: bytes) -> tuple[int, int] | None:
     if data[:6] in (b"GIF87a", b"GIF89a") and len(data) >= 10:
         w, h = struct.unpack("<HH", data[6:10])
         return int(w), int(h)
+    if data[:2] == b"BM" and len(data) >= 22 and struct.unpack("<I", data[14:18])[0] == 12:
+        w, h = struct.unpack("<HH", data[18:22])   # OS/2 BITMAPCOREHEADER (16비트 크기)
+        return int(w), int(h)
     if data[:2] == b"BM" and len(data) >= 26:
         w, h = struct.unpack("<ii", data[18:26])
         return abs(int(w)), abs(int(h))
@@ -26,11 +29,14 @@ def image_size(data: bytes) -> tuple[int, int] | None:
 def _jpeg(data: bytes) -> tuple[int, int] | None:
     i = 2
     n = len(data)
-    while i + 9 < n:
+    while i + 9 <= n:
         if data[i] != 0xFF:
             i += 1
             continue
         marker = data[i + 1]
+        if marker == 0xFF:   # 마커 앞 채움 바이트 (규격상 허용)
+            i += 1
+            continue
         if marker in (0xD8, 0x01) or 0xD0 <= marker <= 0xD7:
             i += 2
             continue

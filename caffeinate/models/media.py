@@ -20,6 +20,7 @@
 - 오디오(audio): platform.editor audio-uploader/session-key 가 406 "Audio Infra ServiceId Config fail : serviceId = cafe"
 - MYBOX 사진·파일·동영상: MYBOX 본인 인증 계정이 필요 (요청에 따라 제외)
 """
+import math
 import random
 import re
 import uuid as _uuid
@@ -42,6 +43,7 @@ from .blocks import (
     _enum_or_str,
     _s,
     _split,
+    font_size_of,
     paragraphs,
 )
 from .photo import UploadedImage
@@ -195,9 +197,13 @@ CAFE_DOCUMENT_WIDTH = 800   # 카페 에디터 productConfig.documentWidth [cafe
 
 def video_display_size(width: int, height: int, document_width: int = CAFE_DOCUMENT_WIDTH) -> tuple[int, int]:
     """에디터가 넣는 표시 크기 - 문서 폭보다 넓으면 비율 유지로 줄인다
-    [실측 2026-11-24: 640x360 -> 640x360, 1280x720 -> 800x450]"""
+    [실측 2026-11-24: 640x360 -> 640x360, 1280x720 -> 800x450]
+
+    높이는 반올림이 아니라 버림이다: 에디터 _resolveWidthAndHeight 가 Math.floor(h * (documentWidth / w))
+    [번들 se-app-context.js]. 곱하는 순서도 같게 해 부동소수 결과까지 맞춘다.
+    """
     if width > document_width and width:
-        return document_width, round(height * document_width / width)
+        return document_width, math.floor(height * (document_width / width))
     return width, height
 
 
@@ -339,6 +345,7 @@ class Formula(Block):
 
     def __post_init__(self) -> None:
         # 빈 latex 는 템플릿(AI 채우기)용 - 렌더할 때 막는다
+        self.font_size = font_size_of(self.font_size)   # 틀린 크기는 브라우저를 띄우기 전에
         if isinstance(self.thumbnail, UploadedImage):
             img = self.thumbnail
             self.thumbnail = Thumbnail(src=f"{img.domain}{img.url}", width=img.width, height=img.height)
@@ -356,8 +363,8 @@ class Formula(Block):
 
     @classmethod
     def _parse(cls, d: JSONDict) -> "Formula":
-        return cls(str(d.get("latex") or " "), d.get("html") or None, Thumbnail.from_dict(d.get("thumbnail")),
-                   _enum_or_str(FontSize, d.get("fontSizeCode")), str(d.get("fontFamily") or "system"),
+        return cls(str(d.get("latex") or ""), d.get("html") or None, Thumbnail.from_dict(d.get("thumbnail")),
+                   _enum_or_str(FontSize, d.get("fontSizeCode"), FontSize.FS15), str(d.get("fontFamily") or "system"),
                    str(d.get("layout") or "default"), id=str(d.get("id") or se_id()),
                    extra=_split(d, ("id", "layout", "latex", "html", "thumbnail", "fontSizeCode", "fontFamily")))
 
@@ -881,6 +888,8 @@ class VoteItem:
 
     name: str = ""                       # 빈 이름은 템플릿(AI 채우기)용 - 보낼 때(to_dict) 검사
     image: Any = None
+    item_id: Any = field(default=None, kw_only=True)    # 서버가 매긴 itemId (저장된 투표를 다시 보낼 때 그대로)
+    extra: JSONDict = field(default_factory=dict, kw_only=True)   # votedByMe·voteCount 등 서버 값 보존
 
 
 @dataclass(slots=True)
@@ -908,6 +917,7 @@ class Vote(Custom):
     close_voters: int | None = None
     cafe_id: int | None = None          # 작성 때 채운다
     writer_id: str | None = None        # 작성 때 채운다 (로그인 아이디)
+    voter_count: int = 0                # 서버 값 (새 투표는 0)
 
     def __post_init__(self) -> None:
         # 빈 제목·항목 이름은 템플릿(AI 채우기)용으로 허용하고 보낼 때(to_dict) 막는다
@@ -940,10 +950,11 @@ class Vote(Custom):
             cond, end, cnt = "none", None, None
         items = []
         for n, it in enumerate(self.items, 1):
-            d: JSONDict = {"itemId": None, "itemOrder": n, "itemName": it.name}
+            d: JSONDict = {"itemId": it.item_id, "itemOrder": n, "itemName": it.name}
             if it.image:
                 d["itemImageUrl"] = it.image
             d["votedByMe"] = False
+            d.update(it.extra)
             items.append(d)
         sel = self.multiple
         sel = min(sel, len(items))  # 에디터 serialize 와 같게
@@ -951,7 +962,7 @@ class Vote(Custom):
                           "closeConditionVoterCount": cnt, "items": items, "selectableCount": sel,
                           "viewProperty": {"resultItemSortType": _s(self.sort), "showVoterChoice": not self.secret,
                                            "resultViewCondition": _s(self.result_view)},
-                          "voteName": self.title, "voteWriterId": self.writer_id, "voterCount": 0,
+                          "voteName": self.title, "voteWriterId": self.writer_id, "voterCount": self.voter_count,
                           "isSecret": self.secret}
         return data
 
@@ -966,9 +977,13 @@ class Vote(Custom):
             extra["data"] = rest   # 서버가 붙인 voteId·uuid 등은 data 에 그대로 다시 넣는다
         cond = str(data.get("closeCondition") or "none")
         items = sorted(as_list(data.get("items")), key=lambda x: as_int(as_dict(x).get("itemOrder")))
-        v = cls(title=str(data.get("voteName") or " "),
-                items=[VoteItem(str(as_dict(i).get("itemName") or " "), as_dict(i).get("itemImageUrl") or None)
+        item_keys = ("itemId", "itemOrder", "itemName", "itemImageUrl")
+        v = cls(title=str(data.get("voteName") or ""),
+                items=[VoteItem(str(as_dict(i).get("itemName") or ""), as_dict(i).get("itemImageUrl") or None,
+                                item_id=as_dict(i).get("itemId"),
+                                extra={k: x for k, x in as_dict(i).items() if k not in item_keys})
                        for i in items],
+                voter_count=as_int(data.get("voterCount")),
                 multiple=as_int(data.get("selectableCount"), 1), secret=bool(data.get("isSecret", True)),
                 result_view=_enum_or_str(VoteResultView, vp.get("resultViewCondition")),
                 sort=_enum_or_str(VoteSort, vp.get("resultItemSortType")),
@@ -1011,6 +1026,8 @@ class ScheduleTimeZone:
     @classmethod
     def from_dict(cls, d: Any) -> Self:
         d = as_dict(d)
+        if not d:
+            return cls()   # timeZone 이 없으면 에디터 기본값 (서울)
         return cls(str(d.get("countryCode") or "KR"), str(d.get("countryName") or ""), str(d.get("cityId") or ""),
                    str(d.get("cityName") or ""), str(d.get("timeZoneId") or "Asia/Seoul"),
                    str(d.get("gmtString") or ""), as_int(d.get("offsetMinute"), 540))
@@ -1088,7 +1105,7 @@ class Schedule(Custom):
             place = Place(str(data.get("location") or ""), float(data["latitude"]), float(data["longitude"]),
                           str(data.get("address") or ""))
         start = _from_ms(data.get("startDateTimeStamp"), tz.tz) or datetime.now(UTC)
-        return cls(title=str(data.get("content") or " "), start=start,
+        return cls(title=str(data.get("content") or ""), start=start,
                    end=_from_ms(data.get("endDateTimeStamp"), tz.tz) or start, all_day=bool(data.get("allDay")),
                    important=bool(data.get("priority")), location=str(data.get("location") or ""), place=place,
                    allow_share=bool(data.get("scrap")), time_zone=tz, uuid=str(data.get("uuid") or _uuid.uuid4()),

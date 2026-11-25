@@ -365,3 +365,10 @@ def test_empty_templates_fill_then_serialize() -> None:
     comps = Document(doc.blocks[:2]).to_dict()["document"]["components"]
     assert comps[0]["data"]["voteName"] == "점심" and comps[1]["data"]["content"] == "모임"
     assert doc.blocks[2].latex == "x^2" and not doc.blocks[2].rendered
+
+
+def test_video_display_height_floors_like_editor() -> None:
+    """[실측 2026-11-25] 에디터에 1920x1082 를 올리면 height 450 (반올림이면 451) - Math.floor"""
+    from caffeinate.models.media import video_display_size
+    assert video_display_size(1920, 1082) == (800, 450)
+    assert video_display_size(1920, 1086) == (800, 452)

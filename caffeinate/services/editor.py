@@ -12,14 +12,18 @@
 요청 모양은 headless Camoufox 로 실제 글쓰기 에디터를 조작해 캡처한 값이다 (각 메서드 주석).
 """
 import asyncio
+import contextlib
 import json
 import logging
 import math
 import mimetypes
 import re
+import shutil
+import sys
+import tempfile
 import time
 import uuid
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Iterator, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -153,6 +157,39 @@ _BLOCK_RE = re.compile(r"\.(?:jpe?g|png|gif|webp|mp4|m3u8)(?:\?|$)|(?:nelo|lcs\.
 
 def _formula_key(f: Formula) -> tuple[str, str]:
     return f.latex, str(getattr(f.font_size, "value", f.font_size))
+
+
+def _try_lock(fh: Any) -> bool:
+    """파일 잠금 (다른 프로세스·같은 프로세스의 다른 핸들과 배타). 못 잡으면 False"""
+    try:
+        if sys.platform == "win32":
+            import msvcrt
+            msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        return False
+    return True
+
+
+@contextlib.contextmanager
+def _profile_dir(prof: Path) -> Iterator[Path]:
+    """수식 렌더용 브라우저 프로필. 이미 다른 렌더가 쓰고 있으면 임시 프로필로 (같은 프로필을 동시에 열면 실행 실패 - 실측)"""
+    prof.mkdir(parents=True, exist_ok=True)
+    fh = open(prof.parent / f"{prof.name}.lock", "a+b")   # noqa: SIM115 - 잠금 동안 열어 둔다
+    try:
+        if _try_lock(fh):
+            yield prof
+            return
+        logger.debug("수식: 프로필 사용 중 -> 임시 프로필")
+        tmp = Path(tempfile.mkdtemp(prefix="caffeinate_editor_"))
+        try:
+            yield tmp
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+    finally:
+        fh.close()   # 닫으면 잠금도 풀린다
 
 
 def file_source(src: Any, default_name: str) -> tuple[bytes, str]:
@@ -480,7 +517,7 @@ class EditorService(BaseService):
         (<img>·MathML 은 보기 화면이 글자로 내보내거나 저장이 거부된다 - 실측).
         글자 크기는 `Formula.font_size` (fs11~fs38) 를 수식 편집기에서 골라 렌더한다.
         """
-        todo: list[Formula] = []
+        groups: dict[tuple[str, str], list[Formula]] = {}   # 같은 수식·크기는 한 번만 렌더
         for f in formulas:
             if f.rendered:
                 continue
@@ -490,9 +527,10 @@ class EditorService(BaseService):
             if hit is not None:   # 같은 수식·크기는 다시 렌더하지 않는다 (이미지는 공용 주소)
                 f.html, f.thumbnail, f.font_size, f.font_family = hit
             else:
-                todo.append(f)
-        if not todo:
+                groups.setdefault(_formula_key(f), []).append(f)
+        if not groups:
             return
+        todo = [g[0] for g in groups.values()]
         self._require_login()
         try:
             from camoufox.async_api import AsyncCamoufox
@@ -513,12 +551,19 @@ class EditorService(BaseService):
             launch["proxy"] = {"server": proxy}
         t0 = time.monotonic()
         # 영구 프로필: 에디터 번들 캐시를 다음 실행에서 재사용 [실측 첫 준비 10.6s -> 3.2s]
-        prof = self.session.settings.editor_profile_dir
-        prof.mkdir(parents=True, exist_ok=True)
-        launch.update(persistent_context=True, user_data_dir=str(prof))
-        async with AsyncCamoufox(**launch) as browser:
+        with _profile_dir(self.session.settings.editor_profile_dir) as prof:
+            launch.update(persistent_context=True, user_data_dir=str(prof))
+            await self._render_in_browser(AsyncCamoufox, launch, cookies, cid, menu_id, todo, timeout, t0)
+        for key, group in groups.items():
+            for f in group[1:]:
+                f.html, f.thumbnail, f.font_size, f.font_family = self._formula_cache[key]
+
+    async def _render_in_browser(self, camoufox: Any, launch: dict[str, Any], cookies: list[dict[str, Any]],
+                                 cid: int, menu_id: int, todo: list[Formula], timeout: float, t0: float) -> None:
+        async with camoufox(**launch) as browser:
             ctx: Any = browser   # persistent_context 면 BrowserContext
             logger.debug("수식: 브라우저 %.1fs", time.monotonic() - t0)
+            await ctx.clear_cookies()   # 프로필에 남은 다른 계정 쿠키가 섞이지 않게
             await ctx.add_cookies(cookies)
 
             async def patch(route: Any) -> None:
@@ -553,12 +598,13 @@ class EditorService(BaseService):
                 await page.click('.se-document-toolbar button[data-name="formula"]')
                 ta = page.locator("textarea.nme_script_editor:visible").first
                 await ta.wait_for(timeout=timeout * 1000)
-                size = _FORMULA_SIZES.get(str(getattr(f.font_size, "value", f.font_size)))
+                want = str(getattr(f.font_size, "value", f.font_size))
+                size = _FORMULA_SIZES.get(want)
                 if size is None:
                     raise ValueError(f"수식 글자 크기는 {list(_FORMULA_SIZES)} 중 하나입니다: {f.font_size!r}")
-                if size != 3:   # 편집기 기본 15 (nme_fontsize3) [실측 2026-11-24 크기 목록 11~38]
-                    await page.click(".nme_tool_fontsize")
-                    await page.click(f"button.nme_fontsize{size}")
+                # 편집기는 앞 수식의 크기를 기억할 수 있다 -> 기본(15)이어도 매번 고른다 [크기 목록 11~38 실측]
+                await page.click(".nme_tool_fontsize")
+                await page.click(f"button.nme_fontsize{size}")
                 await ta.fill(f.latex)
                 stale = await ev(_PREVIEW_JS)
                 # 미리보기는 키 입력으로 갱신된다 (fill 만으로는 빈 수식) [실측]
@@ -588,7 +634,9 @@ class EditorService(BaseService):
                 f.html = str(c.get("html") or "")
                 f.thumbnail = Thumbnail(src=str(th.get("src")), width=int(th.get("width") or 0),
                                         height=int(th.get("height") or 0))
-                f.font_size = str(c.get("fontSizeCode") or f.font_size)
+                got = str(c.get("fontSizeCode") or want)
+                if got != want:
+                    raise RuntimeError(f"수식 글자 크기가 요청과 다르게 렌더됐습니다: {want} -> {got} ({f.latex!r})")
                 f.font_family = str(c.get("fontFamily") or f.font_family)
                 self._formula_cache[_formula_key(f)] = (f.html, f.thumbnail, f.font_size, f.font_family)
                 logger.debug("수식: %r %.1fs", f.latex, time.monotonic() - t1)

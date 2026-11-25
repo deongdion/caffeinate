@@ -161,3 +161,51 @@ def test_public_exports() -> None:
     for name in caffeinate.__all__:
         assert hasattr(caffeinate, name), name
     assert (Path(caffeinate.__file__).parent / "py.typed").exists()
+
+
+def test_login_ocr_non_object_response_is_retry_not_crash(monkeypatch: Any) -> None:
+    """OCR 서버가 JSON 리스트를 주면 AttributeError 로 로그인째 죽지 않고 재시도 -> None"""
+    import asyncio
+
+    from caffeinate.auth import login
+
+    class Resp:
+        ok, status = True, 200
+
+        async def body(self) -> bytes:
+            return b"RIFF"
+
+        async def text(self) -> str:
+            return '["1234"]'
+
+    class Req:
+        posts = 0
+
+        async def get(self, *a: Any, **k: Any) -> Resp:
+            return Resp()
+
+        async def post(self, *a: Any, **k: Any) -> Resp:
+            Req.posts += 1
+            return Resp()
+
+    class Loc:
+        async def count(self) -> int:
+            return 1
+
+    class Page:
+        context = type("C", (), {"request": Req()})()
+
+        def locator(self, _: str) -> Loc:
+            return Loc()
+
+    async def key(_: Any) -> str:
+        return "k"
+
+    async def no_sleep(_: float) -> None:
+        return None
+
+    monkeypatch.setattr(login, "_captcha_audio_key", key)
+    monkeypatch.setattr(login.asyncio, "sleep", no_sleep)
+    seen: list[str] = []
+    assert asyncio.run(login._solve_captcha_audio_once(Page(), login.LoginOptions(), seen.append)) is None
+    assert Req.posts == 2 and any("OCR 응답이 객체가 아님" in s for s in seen)

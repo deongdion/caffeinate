@@ -18,7 +18,7 @@ NaverAPIError 하위 클래스는 서버 에러 코드/HTTP 상태로 고른다 
 `ERROR_STATUSES`). 모두 NaverAPIError 이므로 기존 `except NaverAPIError` / `e.code` 검사는 그대로 동작한다.
 """
 
-from typing import ClassVar
+from typing import Any, ClassVar
 
 LOGIN_HINT = (
     "로그인 쿠키가 없거나 만료되었습니다. "
@@ -160,6 +160,13 @@ class CafeValidationError(CaffeinateError, ValueError):
         self.value = value
         self.result = result
         self.hint = self._HINTS.get(result)
+
+    def __reduce__(self) -> tuple[Any, ...]:  # 키워드 전용 인자라 기본 pickle 이 복원하지 못한다
+        return (_rebuild_validation_error, (self.args[0] if self.args else "", self.field, self.value, self.result))
+
+
+def _rebuild_validation_error(message: str, field: str, value: str, result: str) -> CafeValidationError:
+    return CafeValidationError(message, field=field, value=value, result=result)
 
 
 class CaptchaError(CaffeinateError):

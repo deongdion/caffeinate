@@ -46,7 +46,7 @@ python -m camoufox fetch
 설치 확인:
 
 ```bash
-python -c "import caffeinate.core.curl as c; print(c.BUNDLED)"   # True 여야 정상
+python -c "import caffeinate.core.curl as c; print(c.BUNDLED)"   # 휠 설치면 True 여야 정상 (소스 체크아웃은 False)
 ```
 
 > 위 휠이 없는 플랫폼에서 소스로 설치하면 공식 curl_cffi 로 대신 동작합니다(`pip install ".[fallback]"`).
@@ -161,7 +161,7 @@ async with await Caffeinate.login() as cafe:
 | | `update(ref, menu, title, body, images=)` | 글 수정 → `ArticleRef` |
 | | `delete(ref)` | 글 삭제 |
 | `comments` | `all(ref)` / `iter(ref)` | 댓글 전체 (평탄 목록, `build_tree()` 로 트리) |
-| | `add(ref, body, image=, sticker_id=)` | 댓글 → 댓글 ID (body 는 문자열 / [블록](#댓글-블록) / `CommentDraft`) |
+| | `add(ref, text, *, image=, sticker_id=)` | 댓글 → 댓글 ID (text 는 문자열 / [블록](#댓글-블록) / `CommentDraft`) |
 | | `reply(ref, comment_id, text, image=)` | 답글 → 댓글 ID |
 | | `delete(ref, comment_id)` | 댓글 삭제 |
 | | `best(ref)` | 베스트 댓글 |
@@ -190,6 +190,7 @@ async with await Caffeinate.login() as cafe:
 from caffeinate import (Align, Cell, Code, CodeLayout, Divider, Document, Heading, Image, ImageGroup, LineLayout,
                         Paragraph, QuotationLayout, Quote, RawBlock, Span, Table, Text)
 
+cid = "내카페"                                             # 카페 ID·slug·URL (아래 예제 공통)
 packs = await cafe.editor.sticker_packs(cid, 1)           # StickerPack 16개 (cafe_001, cafe20_002, ...)
 sticker = (await cafe.editor.stickers(cid, 1, packs[0]))[0]
 card = await cafe.editor.link_card(cid, 1, "https://www.naver.com")
@@ -206,7 +207,7 @@ doc = Document([
     ImageGroup(["b.png", "c.png"]),
     sticker, card,
 ])
-await cafe.articles.write(cid, 1, "제목", doc)
+ref = await cafe.articles.write(cid, 1, "제목", doc)
 await cafe.comments.add(ref, "", sticker_id=sticker)   # 댓글 스티커
 ```
 
@@ -325,10 +326,17 @@ draft = CommentDraft.from_spec(ai_json, image="a.png")
 ```
 
 - `hint` 는 스키마의 `description` 으로만 들어가고 contentJson 에는 나가지 않는다.
-- 채울 칸: 글·소제목·인용(출처)·코드·표(줄·칸 수 고정)·hint 가 있는 사진의 캡션. 나머지 블록은 스키마에서 빠지고 그대로 남는다.
+- 채울 칸: 글·소제목·인용(출처)·코드·표(줄마다 칸 수 고정 - 칸 수가 다른 줄도 `prefixItems` 로 고정)·투표(제목·항목)·일정(제목·장소),
+  hint 가 있을 때만 사진 캡션·수식·동영상(제목·설명). 나머지 블록은 스키마에서 빠지고 그대로 남는다
+  (그래서 빈 `Formula("")` 에는 hint 를 꼭 준다).
+- `fill(strict=True)` 는 블록 안의 칸까지 검사한다 (빠진 칸·모르는 칸·`null` 은 `SpecError`). 빈 출처·캡션은 없음(`None`)이 된다.
+  블록 id 는 템플릿 그대로, 문서 id 는 새로 만든다 (같은 템플릿으로 글을 여러 번 쓰므로).
 - `fill_schema(rich=True)` 면 글 칸에 서식 있는 문단 배열도 받는다 (기본은 문자열, 줄바꿈 = 문단).
 - 모든 칸 필수·추가 키 금지 스키마라 structured output 에 그대로 쓸 수 있다. `fill(strict=False)` 는 일부만 채워도 된다.
-- AI 출력이 틀리면 (모르는 type, 빠진 칸, 표 크기 불일치, 틀린 색·링크 등) 전부 `SpecError` (`ValueError`·`TypeError` 겸용).
+- AI 출력이 틀리면 (모르는 type, 빠진 칸, 표 크기 불일치, 틀린 색·링크, `"bold": "false"` 같은 타입 등) 전부 `SpecError`
+  (`CaffeinateError`·`ValueError`·`TypeError` 겸용). 틀린 색·`http(s)` 아닌 링크·빈 표 줄·경로 없는 사진/파일/동영상은 스키마에서도 막는다.
+- `to_spec` → `from_spec` 은 레이아웃·표 너비/정렬/테두리·칸 높이·링크 카드 도메인/동영상 여부·동영상 대표/캡션까지 왕복한다
+  (`ids=True` 면 블록 id 와 일정 uuid 도). 빠지는 것은 `extra` 와 bytes 로 준 사진 원본뿐.
 - 투표·일정·수식은 빈 칸(`Vote("", ["", ""])`, `Schedule("", start)`, `Formula("", hint=...)`)으로 템플릿을 만들 수 있다.
   빈 제목·항목·수식은 보낼 때(`to_dict`)·렌더할 때 `ValueError`.
 - 스티커는 로그인 없이 `Sticker("cafe_001", 3)` 으로 만들어도 된다. 카페 기본 16묶음의 움직임 여부·개수(`STICKER_PACKS`,
@@ -360,7 +368,7 @@ sticker = (await cafe.editor.stickers(cid, 1, "cafe_001"))[0]
 cid_ = await cafe.comments.add(ref, [Text("첫 줄\n둘째 줄"), sticker, Image("a.png")])
 await cafe.comments.reply(ref, cid_, CommentDraft("답글", sticker=sticker))
 await cafe.comments.add(ref, sticker_id=sticker)           # 스티커만
-draft = CommentDraft.from_dict(form); draft.to_dict()      # 폼 필드와 왕복, extra 로 필드 추가
+draft = CommentDraft.from_dict(form); draft.to_dict()      # form = 댓글 폼 dict. 왕복, extra 로 필드 추가
 ```
 
 | 상황 | 서버 [실측 2026-11-24] | 라이브러리 |
@@ -454,8 +462,11 @@ CaffeinateError                 모든 예외의 부모
 │   ├── PermissionDeniedError   멤버 전용 (4004), 비멤버 등급 조회 (40003)
 │   └── RateLimitedError        댓글 연속 등록 제한 (2001), 계속되는 429
 ├── NetworkError                재시도 후에도 연결 실패
-├── ParseError                  URL·응답 해석 실패
-└── LoginError                  브라우저 로그인 실패
+├── ParseError                  URL·응답 해석 실패 (ValueError 겸용)
+├── LoginError                  브라우저 로그인 실패
+├── CafeValidationError         카페 만들기 입력 검증 실패 (e.field, e.value, e.result, ValueError 겸용)
+├── CaptchaError                카페 만들기 캡차를 정해진 횟수 안에 못 풂
+└── SpecError                   spec·AI 채우기 JSON 형식 오류 (ValueError·TypeError 겸용)
 ```
 
 모든 예외의 `str(e)` 에 해결 방법(`e.hint`)이 붙어 있습니다.
@@ -509,6 +520,7 @@ except PermissionDeniedError as e:
 | 글 목록 범위 밖 페이지 | 오류 없이 1페이지를 다시 줌 → 반복자가 이미 본 글로 멈춤 판단 |
 | 좋아요 대상 ID | `{카페ID}_{카페 slug}_{글번호}`. slug 가 틀려도 오류 없이 빈 결과가 옴 |
 | 좋아요 요청 | `route-like.naver.com` 으로 `<script>` JSONP 방식 |
+| 저장된 투표 다시 저장 | 항목 `itemId` 없이 보내면 항목이 **새로 추가**됨 (3 → 6 → 12개). `itemId` 를 보내면 항목·표 그대로. 보내지 않은 항목도 지워지지 않음 [실측 2026-11-24] → `Document.from_dict` 로 읽은 투표는 `itemId` 를 보존해 다시 보낸다 |
 | 좋아요 누른 사람 다음 페이지 | 페이지 번호가 아니라 `nextTimestamp` 커서 |
 | 댓글 연속 등록 | 두 번째부터 2001 오류. 약 12초 뒤 다시 보내면 성공 (자동 재시도) |
 | 글 정렬 | 서버가 실제로 적용하는 값은 `TIME`(최신순), `LIKE`(좋아요순) 두 가지 |
@@ -590,6 +602,23 @@ mypy caffeinate
 - 댓글 블록: `comments.add/reply` 가 블록 목록·`CommentDraft` 를 받음 (글 + 스티커 + 사진, 6000바이트 검사)
 - spec·JSON Schema: `Document.to_spec/from_spec/json_schema/fill_schema/fill`, 블록 `hint`, `CommentDraft.json_schema`, `SpecError`
 - `RequestKind.IFRAME` / `RequestKind.AUDIO` 헤더 (iframe 폼 제출, `<audio>` 미디어 요청)
+- 리뷰 수정 (에이전트 4개 교차 검토 → 재현된 것만):
+  - 카페 만들기: 만든 뒤 ID 조회가 어떤 오류로 실패해도 결과를 돌려줌 (중복 생성 방지), OCR 서버 연결 실패도 재시도 → `CaptchaError`,
+    `keywords="한 단어"` 가 글자로 쪼개지던 것, `regions()`/`manage_info()` 오류 본문을 빈 값으로 삼키던 것, 캡차 키를 다시 받을 때
+    화면 토큰도 함께 새로 받기 (실측: 서버는 `clubTempId`·캡차 키 짝을 검사하지 않음 - 섞어 보내도 5/5 생성), 만든 뒤 바꾼 옵션 재검사, 본문 401 → `NotLoggedInError`, `CafeValidationError` pickle, 업로더 세션키 로그 가림
+  - 블록: `CommentDraft.of(CommentDraft(image=경로))` 사진이 글로 들어가던 것, 서버 서식 값(`transparent`·`#rrggbbaa` 등)에
+    `from_dict` 가 죽던 것 (extra 로 보존), 해석 못 한 컴포넌트는 `RawBlock` 으로 보존, `to_dict` 가 `represent=False`·extra 리스트를
+    바꾸던 것, layout 없는 묶음 사진·링크 카드 기본값, 모르는 스티커 `format` 보존, 블록 `==` 이 id 를 비교하지 않음
+  - 투표: 저장된 투표를 다시 보낼 때 `itemId`·`voteId`·`voterCount`·`votedByMe` 보존 (`VoteItem.item_id`, `Vote.voter_count`).
+    [실측] 예전처럼 `itemId` 없이 보내면 서버가 항목을 복제 (3 → 6 → 12개), 보존하면 항목·표(1표) 그대로
+  - 수식: 같은 프로필 동시 사용 시 임시 프로필로 (동시 실행 실패 수정, [실측] 동시 렌더 2건 25.0s 모두 성공), 이전 쿠키 정리, 같은 수식은 배치에서 한 번만 렌더,
+    크기를 매번 고르고 결과 크기 확인, 틀린 `font_size` 는 만들 때 `ValueError`
+  - 이미지 크기: JPEG 채움 바이트·파일 끝 SOF, OS/2 BMP
+  - 동영상 표시 높이: 반올림 -> 에디터와 같은 버림 (`Math.floor`). 실측: 1920x1082 를 에디터에 올리면 800x450 (반올림이면 451)
+  - 로그인: OCR 서버가 객체가 아닌 JSON 을 주면 `AttributeError` 로 로그인째 죽던 것 -> OCR 실패로 재시도
+  - 아이콘 업로드: 효과 없던 `cache-control: max-age=0` 제거 (Chromium 캡처 값. 실측: Firefox 는 iframe 폼 POST 에 보내지 않음)
+  - spec: 표 칸 수 `prefixItems`, 블록 안 칸 strict 검사, 빈 출처·캡션 → None, 줄바꿈 든 글자 조각·빈 문단 목록 왕복,
+    스키마 색·링크 패턴, `SpecError` 가 `CaffeinateError` 하위
 
 ### 0.4.0
 

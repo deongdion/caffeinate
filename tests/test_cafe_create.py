@@ -406,3 +406,21 @@ def test_create_requires_login() -> None:
 
     with pytest.raises(NotLoggedInError):
         asyncio.run(Caffeinate(cookies=[]).cafes.create(name="온울"))
+
+
+def test_review_fixes_core() -> None:
+    """리뷰에서 찾은 것: 키워드 문자열 하나, 검증 오류 pickle, 본문 401, 업로더 세션키 로그"""
+    import pickle
+
+    from caffeinate.core.errors import CafeValidationError, NotLoggedInError
+    from caffeinate.core.session import _log_url
+    from caffeinate.models.creation import CafeCreateOptions
+    from caffeinate.services.cafe_create import _ensure_ok
+
+    assert CafeCreateOptions(name="온울", keywords="항공권").keywords == ("항공권",)
+    e = pickle.loads(pickle.dumps(CafeValidationError("x", field="url", value="v", result="DUPLICATED")))
+    assert (e.args[0], e.field, e.value, e.result, e.hint is not None) == ("x", "url", "v", "DUPLICATED", True)
+    with pytest.raises(NotLoggedInError):
+        _ensure_ok({"message": {"status": "401", "error": {"code": "9999", "msg": "x"}}}, "t", "u")
+    assert _log_url("https://cafe.upphoto.naver.com/SESSIONKEYabcdefghij0123/upload/0?x=1") == \
+        "https://cafe.upphoto.naver.com/***/upload/0"

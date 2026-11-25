@@ -33,6 +33,7 @@ from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import Any
 
+from ..core.errors import CaffeinateError
 from ..enums.editor import (
     Align,
     CodeLayout,
@@ -89,7 +90,7 @@ from .photo import UploadedImage
 JSONDict = dict[str, Any]
 
 
-class SpecError(ValueError, TypeError):
+class SpecError(CaffeinateError, ValueError, TypeError):
     """spec/채우기 JSON 이 형식에 맞지 않음 (AI 출력 검사용 - ValueError 로도 TypeError 로도 잡힌다)"""
 
 TYPE_OF: dict[type[Block], str] = {
@@ -107,8 +108,8 @@ CLASS_OF: dict[str, type[Block]] = {v: k for k, v in TYPE_OF.items()}
 
 def _span_spec(s: Span) -> Any:
     st = s.style
-    if (st is None or st.is_empty()) and not s.link:
-        return s.text
+    if (st is None or st.is_empty()) and not s.link and "\n" not in s.text and "\r" not in s.text:
+        return s.text   # 줄바꿈이 든 글자 조각은 객체로 (문자열이면 문단 구분으로 읽힌다)
     d: JSONDict = {"text": s.text}
     if st:
         for k in ("bold", "italic", "underline", "strike"):
@@ -170,6 +171,8 @@ def defaults_from(v: Any) -> ParagraphDefaults | None:
 def paragraphs_spec(ps: Sequence[Paragraph]) -> Any:
     """문단 목록 -> 서식 없으면 "줄\\n줄" 문자열, 있으면 배열"""
     items = [_para_spec(p) for p in ps]
+    if not items:
+        return []   # 문단 0개 ("" 는 빈 문단 1개로 읽힌다)
     if all(isinstance(i, str) and "\n" not in i for i in items):
         return "\n".join(items)
     return items
@@ -208,6 +211,7 @@ def to_spec(block: Block, *, ids: bool = False) -> JSONDict:
         d["defaults"] = ds
     if isinstance(block, Text | Heading):
         d["content"] = paragraphs_spec(block.content)
+        _layout(d, block.layout)
     elif isinstance(block, Quote):
         d["content"] = paragraphs_spec(block.content)
         if block.source:
@@ -222,8 +226,16 @@ def to_spec(block: Block, *, ids: bool = False) -> JSONDict:
             d["font_size"] = _v(block.font_size)
     elif isinstance(block, Table):
         d["rows"] = [[_cell_spec(c) for c in r.cells] for r in block.rows]
+        if block.width != 100:
+            d["width"] = block.width
+        _layout(d, block.layout)
+        if block.align:
+            d["align"] = _v(block.align)
+        if block.border_style:
+            d["border_style"] = block.border_style
     elif isinstance(block, Image):
         d = _image_spec(block)
+        _layout(d, block.layout)
     elif isinstance(block, ImageGroup | ImageStrip):
         d["images"] = [_image_spec(i) for i in block.items]
         if isinstance(block, ImageGroup):
@@ -233,8 +245,13 @@ def to_spec(block: Block, *, ids: bool = False) -> JSONDict:
                  animated=block.animated)
         if block.url:
             d["url"] = block.url
+        _layout(d, block.layout)
     elif isinstance(block, LinkCard):
         d.update(url=block.url, title=block.title, description=block.description, layout=_v(block.layout))
+        if block.domain:
+            d["domain"] = block.domain
+        if block.video:
+            d["video"] = True
         if block.thumbnail:
             d["thumbnail"] = {"src": block.thumbnail.src, "width": block.thumbnail.width,
                               "height": block.thumbnail.height}
@@ -254,6 +271,11 @@ def to_spec(block: Block, *, ids: bool = False) -> JSONDict:
         else:
             d["source"] = _path_or_none(block.source)
         d.update(title=block.title, description=block.description, tags=list(block.tags))
+        if block.caption:
+            d["caption"] = paragraphs_spec(block.caption)
+        if block.represent:
+            d["represent"] = True
+        _layout(d, block.layout)
     elif isinstance(block, Map):
         d["places"] = [_place_spec(p) for p in block.places]
     elif isinstance(block, Formula):
@@ -274,11 +296,18 @@ def to_spec(block: Block, *, ids: bool = False) -> JSONDict:
                  allow_share=block.allow_share)
         if block.place:
             d["place"] = _place_spec(block.place)
+        if ids:
+            d["uuid"] = block.uuid   # 일정 식별자도 id 처럼 (같은 일정으로 다시 저장할 때)
     elif isinstance(block, RawBlock | Embed | Material):
         d["data"] = block.to_dict()
     if ids:
         d["id"] = block.id
     return d
+
+
+def _layout(d: JSONDict, layout: Any) -> None:
+    if _v(layout) != "default":
+        d["layout"] = _v(layout)
 
 
 def _path_or_none(v: Any) -> str | None:
@@ -315,7 +344,8 @@ def _dt(v: Any, what: str) -> Any:
 
 def _cell_spec(c: Cell) -> Any:
     content = paragraphs_spec(c.content)
-    if c.col_span == 1 and c.row_span == 1 and not c.background and not c.align and isinstance(content, str):
+    if (c.col_span == 1 and c.row_span == 1 and not c.background and not c.align and c.width is None
+            and c.height == 43 and isinstance(content, str)):
         return content
     d: JSONDict = {"content": content}
     if c.col_span != 1:
@@ -326,6 +356,10 @@ def _cell_spec(c: Cell) -> Any:
         d["background"] = c.background
     if c.align:
         d["align"] = _v(c.align)
+    if c.width is not None:
+        d["width"] = c.width
+    if c.height != 43:
+        d["height"] = c.height
     return d
 
 
@@ -336,9 +370,12 @@ def _span_from(v: Any) -> Span:
     if isinstance(v, str):
         return Span(v)
     d = as_dict(v)
-    if "text" not in d:
-        raise SpecError(f"글자 조각에는 text 가 있어야 합니다: {v!r}")
-    return Span(str(d["text"]), link=d.get("link") or None,
+    if not isinstance(d.get("text"), str):
+        raise SpecError(f"글자 조각에는 문자열 text 가 있어야 합니다: {v!r}")
+    for k in ("bold", "italic", "underline", "strike"):
+        if d.get(k) is not None and not isinstance(d[k], bool):
+            raise SpecError(f"{k} 는 true/false 여야 합니다: {d[k]!r}")   # "false" 가 참이 되지 않게
+    return Span(d["text"], link=d.get("link") or None,
                 style=TextStyle(bold=bool(d.get("bold")), italic=bool(d.get("italic")),
                                 underline=bool(d.get("underline")), strike=bool(d.get("strike")),
                                 color=d.get("color") or None, background=d.get("background") or None,
@@ -399,9 +436,9 @@ def _from_spec(item: JSONDict) -> Block:
     if t in ("text", "heading", "quote") and d.get("defaults") is not None:
         kw["defaults"] = defaults_from(d["defaults"])
     if t == "text":
-        return Text(paragraphs_from(d.get("content", "")), **kw)
+        return Text(paragraphs_from(d.get("content", "")), str(d.get("layout") or "default"), **kw)
     if t == "heading":
-        return Heading(paragraphs_from(d.get("content", "")), **kw)
+        return Heading(paragraphs_from(d.get("content", "")), str(d.get("layout") or "default"), **kw)
     if t == "quote":
         src = d.get("source")
         return Quote(paragraphs_from(d.get("content", "")), paragraphs_from(src) if src else None,
@@ -414,9 +451,12 @@ def _from_spec(item: JSONDict) -> Block:
         rows = d.get("rows")
         if not isinstance(rows, list):
             raise SpecError("table 에는 rows 배열이 있어야 합니다")
-        return Table([TableRow([_cell_from(c) for c in as_list_strict(r, "표 줄")]) for r in rows], **kw)
+        return Table([TableRow([_cell_from(c) for c in as_list_strict(r, "표 줄")]) for r in rows],
+                     d.get("width", 100), str(d.get("layout") or "default"), align=d.get("align") or None,
+                     border_style=d.get("border_style") or None, **kw)
     if t == "image":
         img = _image_from(d)
+        img.layout = str(d.get("layout") or "default")
         if kw:
             img.id = kw["id"]
         return img
@@ -428,13 +468,16 @@ def _from_spec(item: JSONDict) -> Block:
     if t == "sticker":
         return Sticker(str(d.get("pack_code") or ""), as_int(d.get("seq")), as_int(d.get("width"), 185),
                        as_int(d.get("height"), 160), d.get("url") or None,
-                       bool(d["animated"]) if d.get("animated") is not None else None, **kw)
+                       bool(d["animated"]) if d.get("animated") is not None else None,
+                       str(d.get("layout") or "default"), **kw)
     if t == "link_card":
         th = as_dict(d.get("thumbnail"))
-        return LinkCard(str(d.get("url") or ""), str(d.get("title") or ""), "", str(d.get("description") or ""),
+        return LinkCard(str(d.get("url") or ""), str(d.get("title") or ""), str(d.get("domain") or ""),
+                        str(d.get("description") or ""),
                         Thumbnail(src=str(th["src"]), width=as_int(th.get("width")), height=as_int(th.get("height")))
                         if th.get("src") else None,
-                        d.get("sign") or None, layout=d.get("layout") or LinkCardLayout.LARGE_IMAGE, **kw)
+                        d.get("sign") or None, bool(d.get("video")), d.get("layout") or LinkCardLayout.LARGE_IMAGE,
+                        **kw)
     if t == "file":
         up = as_dict(d.get("uploaded"))
         return File(UploadedFile(str(up.get("file_id") or ""), str(up.get("file_name") or ""),
@@ -444,8 +487,11 @@ def _from_spec(item: JSONDict) -> Block:
         vsrc: Any = (UploadedVideo(str(vu.get("vid") or ""), as_int(vu.get("file_size")), as_int(vu.get("play_time")),
                                   as_int(vu.get("width")), as_int(vu.get("height")), str(vu.get("thumbnail") or ""),
                                   str(vu.get("service_id") or "5")) if vu else d.get("source"))
+        cap = d.get("caption")
         return Video(vsrc, str(d.get("title") or ""), str(d.get("description") or ""),
-                     [str(x) for x in as_list_strict(d.get("tags") or [], "tags")], **kw)
+                     [str(x) for x in as_list_strict(d.get("tags") or [], "tags")],
+                     paragraphs_from(cap) if cap else None, bool(d.get("represent")) or None,
+                     str(d.get("layout") or "default"), **kw)
     if t == "map":
         return Map([_place_from(p) for p in as_list_strict(d.get("places"), "places")], **kw)
     if t == "formula":
@@ -460,7 +506,8 @@ def _from_spec(item: JSONDict) -> Block:
     if t == "schedule":
         return Schedule(str(d.get("title") or ""), _dt(d.get("start"), "start"), _dt(d.get("end"), "end"),
                         bool(d.get("all_day")), bool(d.get("important")), str(d.get("location") or ""),
-                        _place_from(d["place"]) if d.get("place") else None, bool(d.get("allow_share")), **kw)
+                        _place_from(d["place"]) if d.get("place") else None, bool(d.get("allow_share")),
+                        **({"uuid": str(d["uuid"])} if d.get("uuid") else {}), **kw)  # type: ignore[arg-type]
     data = dict(as_dict(d.get("data")))
     if t in ("embed", "material"):
         b = Block.from_dict(data)
@@ -481,7 +528,8 @@ def _cell_from(v: Any) -> Cell:
         return Cell(v)
     d = as_dict(v)
     return Cell(paragraphs_from(d.get("content", "")), as_int(d.get("col_span"), 1), as_int(d.get("row_span"), 1),
-                background=d.get("background") or None, align=d.get("align") or None)
+                background=d.get("background") or None, align=d.get("align") or None,
+                width=d.get("width"), height=as_int(d.get("height"), 43))
 
 
 def document_to_spec(doc: Document, *, ids: bool = False) -> JSONDict:
@@ -516,21 +564,26 @@ def _enum(e: type[Any]) -> JSONDict:
     return {"type": "string", "enum": [m.value for m in e]}
 
 
+_COLOR = {"type": "string", "pattern": r"^(#[0-9a-fA-F]{6}|rgb\(\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*\d{1,3}\s*\))$",
+          "description": "#rrggbb"}
+_LINK = {"type": "string", "pattern": "^[hH][tT][tT][pP][sS]?://", "description": "http(s) 주소"}
+_LAYOUT = {"type": "string", "description": "에디터 layout 값 (보통 생략 = default)"}
+# 사진·파일·동영상: 파일 경로(source) 나 올린 결과(uploaded) 중 하나는 있어야 한다
+_SOURCE_OR_UPLOADED = {"anyOf": [{"required": ["source"]}, {"required": ["uploaded"]}]}
+
+
 def _defs() -> JSONDict:
     span = {"anyOf": [{"type": "string"}, {
         "type": "object", "required": ["text"], "additionalProperties": False, "properties": {
             "text": {"type": "string"}, "bold": {"type": "boolean"}, "italic": {"type": "boolean"},
             "underline": {"type": "boolean"}, "strike": {"type": "boolean"},
-            "color": {"type": "string", "description": "#rrggbb"},
-            "background": {"type": "string", "description": "#rrggbb"},
-            "size": _enum(FontSize), "font": _enum(FontFamily),
-            "link": {"type": "string", "description": "http(s) 주소"}}}]}
+            "color": _COLOR, "background": _COLOR,
+            "size": _enum(FontSize), "font": _enum(FontFamily), "link": _LINK}}]}
     line_height = {"type": "number", "exclusiveMinimum": 0, "description": "줄 간격 (1.6 = 160%, 에디터 메뉴 1.5~2.1)"}
     defaults = {"type": "object", "additionalProperties": False,
                 "description": "모든 문단의 기본 서식 (문단·글자에 직접 준 값이 이긴다)", "properties": {
                     "bold": {"type": "boolean"}, "italic": {"type": "boolean"}, "underline": {"type": "boolean"},
-                    "strike": {"type": "boolean"}, "color": {"type": "string", "description": "#rrggbb"},
-                    "background": {"type": "string", "description": "#rrggbb"}, "size": _enum(FontSize),
+                    "strike": {"type": "boolean"}, "color": _COLOR, "background": _COLOR, "size": _enum(FontSize),
                     "font": _enum(FontFamily), "align": _enum(Align), "line_height": line_height}}
     para = {"anyOf": [{"type": "string"}, {
         "type": "object", "required": ["spans"], "additionalProperties": False, "properties": {
@@ -541,18 +594,22 @@ def _defs() -> JSONDict:
     cell = {"anyOf": [{"type": "string"}, {
         "type": "object", "required": ["content"], "additionalProperties": False, "properties": {
             "content": {"$ref": "#/$defs/paragraphs"}, "col_span": {"type": "integer", "minimum": 1},
-            "row_span": {"type": "integer", "minimum": 1}, "background": {"type": "string"}, "align": _enum(Align)}}]}
+            "row_span": {"type": "integer", "minimum": 1}, "background": _COLOR, "align": _enum(Align),
+            "width": {"type": "number", "exclusiveMinimum": 0}, "height": {"type": "integer", "minimum": 1}}}]}
     place = {"type": "object", "required": ["name", "latitude", "longitude"], "additionalProperties": False,
              "properties": {"name": {"type": "string"}, "latitude": {"type": "number"},
                             "longitude": {"type": "number"}, "address": {"type": "string"},
                             "place_id": {"type": "string"}, "tel": {"type": "string"}}}
-    image = _obj("image", {"source": {"type": "string", "description": "사진 파일 경로"},
-                           "caption": {"$ref": "#/$defs/paragraphs"}, "link": {"type": "string"},
-                           "uploaded": {"type": "object"}, "represent": {"type": "boolean"}}, [])
+    image = {**_obj("image", {"source": {"type": "string", "description": "사진 파일 경로"},
+                              "caption": {"$ref": "#/$defs/paragraphs"}, "link": _LINK,
+                              "uploaded": {"type": "object"}, "represent": {"type": "boolean"}, "layout": _LAYOUT},
+                    []), **_SOURCE_OR_UPLOADED}
 
     blocks = {
-        "text": _obj("text", {"content": {"$ref": "#/$defs/paragraphs"}, "defaults": {"$ref": "#/$defs/defaults"}}, ["content"]),
-        "heading": _obj("heading", {"content": {"$ref": "#/$defs/paragraphs"}, "defaults": {"$ref": "#/$defs/defaults"}}, ["content"]),
+        "text": _obj("text", {"content": {"$ref": "#/$defs/paragraphs"}, "defaults": {"$ref": "#/$defs/defaults"},
+                              "layout": _LAYOUT}, ["content"]),
+        "heading": _obj("heading", {"content": {"$ref": "#/$defs/paragraphs"},
+                                    "defaults": {"$ref": "#/$defs/defaults"}, "layout": _LAYOUT}, ["content"]),
         "quote": _obj("quote", {"content": {"$ref": "#/$defs/paragraphs"}, "source": {"$ref": "#/$defs/paragraphs"},
                                 "layout": _enum(QuotationLayout), "defaults": {"$ref": "#/$defs/defaults"}},
                       ["content"]),
@@ -560,7 +617,12 @@ def _defs() -> JSONDict:
         "code": _obj("code", {"code": {"type": "string"}, "layout": _enum(CodeLayout), "font_size": _enum(FontSize)},
                      ["code"]),
         "table": _obj("table", {"rows": {"type": "array", "minItems": 1,
-                                         "items": {"type": "array", "items": {"$ref": "#/$defs/cell"}}}}, ["rows"]),
+                                         "items": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/cell"}}},
+                                "width": {"type": "number", "exclusiveMinimum": 0, "maximum": 100,
+                                          "description": "글 너비 대비 % (기본 100)"},
+                                "layout": _LAYOUT, "align": _enum(Align),
+                                "border_style": {"type": "string", "description": "borderStyleName (thinLine ...)"}},
+                      ["rows"]),
         "image": image,
         "image_group": _obj("image_group", {"images": {"type": "array", "minItems": 2, "items": image},
                                             "layout": _enum(ImageGroupLayout)}, ["images"]),
@@ -569,21 +631,25 @@ def _defs() -> JSONDict:
                                         f"{k}(1~{n})" for k, (_, n) in STICKER_PACKS.items())},
                                     "seq": {"type": "integer", "minimum": 1},
                                     "width": {"type": "integer"}, "height": {"type": "integer"},
-                                    "animated": {"type": "boolean"}, "url": {"type": "string"}}, ["pack_code", "seq"]),
-        "link_card": _obj("link_card", {"url": {"type": "string"}, "title": {"type": "string"},
+                                    "animated": {"type": "boolean"}, "url": {"type": "string"},
+                                    "layout": _LAYOUT}, ["pack_code", "seq"]),
+        "link_card": _obj("link_card", {"url": _LINK, "title": {"type": "string"},
+                                        "domain": {"type": "string"}, "video": {"type": "boolean"},
                                         "description": {"type": "string"}, "layout": _enum(LinkCardLayout),
                                         "thumbnail": {"type": "object", "properties": {
                                             "src": {"type": "string"}, "width": {"type": "integer"},
                                             "height": {"type": "integer"}}, "required": ["src"]},
                                         "sign": {"type": "string", "description": "서버 서명 (cafe.editor.link_card)"}},
                           ["url"]),
-        "file": _obj("file", {"source": {"type": "string", "description": "첨부할 파일 경로 (50MB 까지)"},
-                              "uploaded": {"type": "object"}}, []),
-        "video": _obj("video", {"source": {"type": "string", "description": "동영상 파일 경로"},
-                                "uploaded": {"type": "object"},
-                                "title": {"type": "string", "maxLength": 40},
-                                "description": {"type": "string", "maxLength": 300},
-                                "tags": {"type": "array", "maxItems": 10, "items": {"type": "string"}}}, []),
+        "file": {**_obj("file", {"source": {"type": "string", "description": "첨부할 파일 경로 (50MB 까지)"},
+                                 "uploaded": {"type": "object"}}, []), **_SOURCE_OR_UPLOADED},
+        "video": {**_obj("video", {"source": {"type": "string", "description": "동영상 파일 경로"},
+                                   "uploaded": {"type": "object"},
+                                   "title": {"type": "string", "maxLength": 40},
+                                   "description": {"type": "string", "maxLength": 300},
+                                   "tags": {"type": "array", "maxItems": 10, "items": {"type": "string"}},
+                                   "caption": {"$ref": "#/$defs/paragraphs"}, "represent": {"type": "boolean"},
+                                   "layout": _LAYOUT}, []), **_SOURCE_OR_UPLOADED},
         "map": _obj("map", {"places": {"type": "array", "minItems": 1, "items": place}}, ["places"]),
         "formula": _obj("formula", {"latex": {"type": "string", "description": "LaTeX 수식"}}, ["latex"]),
         "vote": _obj("vote", {
@@ -603,7 +669,8 @@ def _defs() -> JSONDict:
             "start": {"type": "string", "description": "시작 ISO 8601 (시간대 없으면 서울)"},
             "end": {"type": "string", "description": "끝 ISO 8601 (없으면 시작 + 1시간)"},
             "all_day": {"type": "boolean"}, "important": {"type": "boolean"}, "location": {"type": "string"},
-            "place": place, "allow_share": {"type": "boolean"}}, ["title", "start"]),
+            "place": place, "allow_share": {"type": "boolean"},
+            "uuid": {"type": "string", "description": "일정 식별자 (to_spec(ids=True) 가 넣는다)"}}, ["title", "start"]),
     }
     return {"defaults": defaults, "span": span, "paragraph": para, "paragraphs": paras, "cell": cell,
             **{f"block_{k}": v for k, v in blocks.items()},
@@ -651,8 +718,8 @@ def _fill_fields(b: Block, rich: bool) -> JSONDict | None:
         cols = [len(r.cells) for r in b.rows]
         rows = [{"type": "array", "minItems": n, "maxItems": n, "items": {"type": "string"}} for n in cols]
         same = len(set(cols)) == 1
-        return {"rows": {"type": "array", "minItems": len(rows), "maxItems": len(rows),
-                         "items": rows[0] if same else {"type": "array", "items": {"type": "string"}},
+        shape: JSONDict = {"items": rows[0]} if same else {"prefixItems": rows, "items": False}
+        return {"rows": {"type": "array", "minItems": len(rows), "maxItems": len(rows), **shape,
                          "description": (h + " - " if h else "") + f"{len(rows)}줄 x 칸 수 {cols} (줄마다 칸 수 고정)"}}
     if isinstance(b, Image) and h:
         return {"caption": {"type": "string", "description": h}}
@@ -700,7 +767,8 @@ def fill_schema(doc: Document, *, rich: bool = False) -> JSONDict:
 def fill(doc: Document, data: Any, *, strict: bool = True) -> Document:
     """템플릿 + AI 가 채운 JSON -> 같은 구조의 새 Document (원본은 그대로)
 
-    data: fill_schema 형식 {"0_heading": {...}, ...}. strict 면 칸 누락·모르는 키·표 크기 불일치를 ValueError 로.
+    data: fill_schema 형식 {"0_heading": {...}, ...}. strict 면 칸 누락·모르는 키·표 크기 불일치를 ValueError 로
+    (블록 안의 칸까지 검사). 블록 id 는 템플릿 그대로, 문서 id 는 새로 만든다 (같은 템플릿으로 글을 여러 번 쓰므로).
     """
     d = as_dict(data)
     keys = dict(fill_keys(doc))
@@ -716,6 +784,13 @@ def fill(doc: Document, data: Any, *, strict: bool = True) -> Document:
             continue
         if not isinstance(d[key], Mapping):
             raise SpecError(f"{key}: 객체여야 합니다")
+        if strict:
+            want = set(_fill_fields(doc.blocks[i], False) or {})
+            missing = sorted(want - set(d[key]))
+            unknown = sorted(set(d[key]) - want)
+            nulls = sorted(k for k in want & set(d[key]) if d[key][k] is None)
+            if missing or unknown or nulls:
+                raise SpecError(f"{key}: 칸이 템플릿과 다릅니다 (빠짐: {missing}, 모름: {unknown}, null: {nulls})")
         try:
             _apply(out.blocks[i], dict(d[key]), strict)
         except SpecError as e:
@@ -733,15 +808,20 @@ def _keep_sources(tpl: Block, new: Block) -> None:
         b.source = a.source
 
 
+def _blank(v: Any) -> bool:
+    """빈 칸 (None, 공백뿐인 글, 빈 목록) - 출처·캡션은 빈 문단 대신 없음으로"""
+    return v is None or (isinstance(v, str) and not v.strip()) or (isinstance(v, list | tuple) and not v)
+
+
 def _apply(b: Block, item: JSONDict, strict: bool) -> None:
     if isinstance(b, Text | Heading | Quote) and "content" in item:
         b.content = paragraphs_from(item["content"])
     if isinstance(b, Quote) and "source" in item:
-        b.source = paragraphs_from(item["source"]) or None
+        b.source = None if _blank(item["source"]) else paragraphs_from(item["source"])
     if isinstance(b, Code) and "code" in item:
         b.code = str(item["code"])
     if isinstance(b, Image) and "caption" in item:
-        b.caption = paragraphs_from(item["caption"]) or None
+        b.caption = None if _blank(item["caption"]) else paragraphs_from(item["caption"])
     if isinstance(b, Vote):
         if "title" in item:
             b.title = str(item["title"])

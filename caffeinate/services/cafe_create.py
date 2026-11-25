@@ -12,6 +12,7 @@
 
 API 요청은 모두 axios XHR: Content-Type(application/json) -> X-Cafe-Product: pc, Referer 는 카페 만들기 화면.
 """
+import logging
 import re
 import secrets
 from typing import TYPE_CHECKING, Any
@@ -19,7 +20,14 @@ from urllib.parse import urlencode
 
 from ..core import endpoints
 from ..core.config import CAFE_CREATE_PAGE
-from ..core.errors import CafeValidationError, CaptchaError, NaverAPIError, ParseError, api_error_class
+from ..core.errors import (
+    CafeValidationError,
+    CaffeinateError,
+    CaptchaError,
+    NaverAPIError,
+    ParseError,
+    api_error_class,
+)
 from ..core.session import error_info
 from ..enums import CafeFormField, CaptchaType, RequestKind, ValidationResult
 from ..models import (
@@ -56,6 +64,7 @@ _ICON_XHR_HEADERS = {  # jindo XHR: Content-Type + charset 커스텀 헤더, Acc
 }
 # PhotoUpload.nhn 이 location.href 로 보내는 업로더 주소: domain + '/{세션키}/profileUploader?apiKey=...#origin=...'
 _RE_ICON_UPLOADER = re.compile(r"/([A-Za-z0-9_-]{20,})/profileUploader\?([^'\"#\s]+)")
+logger = logging.getLogger(__name__)
 _RE_JS_FIELD = re.compile(r"(\w+)\s*:\s*(\"[^\"]*\"|-?\d+|true|false|null)")
 
 
@@ -69,9 +78,8 @@ def _ensure_ok(data: Any, what: str, url: str) -> JSON:
     status = str(dig(data, "message", "status") or "")
     if status and status != "200":
         code, reason = error_info(data)
-        raise api_error_class(None, code)(
-            f"{what} 실패 ({code} {reason}): {url}", int(status) if status.isdigit() else None, str(data)[:500], code,
-        )
+        st = int(status) if status.isdigit() else None
+        raise api_error_class(st, code)(f"{what} 실패 ({code} {reason}): {url}", st, str(data)[:500], code)
     return _result(data)
 
 
@@ -131,6 +139,7 @@ class CafeCreationMixin:
         """
         url = endpoints.cafe_regions(parent, overseas=overseas)
         data = await self.session.get_json(url, headers=dict(endpoints.PRODUCT_HEADERS), referer=CAFE_CREATE_PAGE)
+        _ensure_ok(data, "카페 지역 조회", url)
         rows = as_dict(data).get("result")
         if rows is None:
             rows = _result(data)
@@ -140,10 +149,14 @@ class CafeCreationMixin:
         """카페 관리 설정 -> CafeManageInfo (공개 유형, 실명 가입, 주제, 지역, 키워드). 매니저만 [실측 2026-11-24]"""
         self._require_login()
         cid = await self.resolve_id(cafe)
+        url = endpoints.cafe_manage(cid)
         data = await self.session.get_json(
-            endpoints.cafe_manage(cid), headers=dict(endpoints.PRODUCT_HEADERS),
+            url, headers=dict(endpoints.PRODUCT_HEADERS),
             referer=f"https://cafe.naver.com/ca-fe/cafes/{cid}/manage",  # [추정] 관리 화면
         )
+        res = _ensure_ok(data, "카페 관리 설정 조회", url) or as_dict(as_dict(data).get("result"))
+        if not as_dict(res.get("cafe")):
+            raise ParseError(f"카페 관리 설정 응답에 cafe 가 없습니다: {str(data)[:300]}")
         return CafeManageInfo.from_api(data, cid)
 
     # ------------------------------------------------------------ 검증
@@ -228,7 +241,9 @@ class CafeCreationMixin:
         resp = await s.post(
             endpoints.icon_upload(key),
             params={"autorotate": "true", "documentDomain": "false", "skipXcamFiltering": "true"},
-            data=body, headers={"content-type": content_type, "cache-control": "max-age=0"},
+            # Cache-Control 은 넣지 않는다: 파이어폭스는 iframe 폼 POST 에 보내지 않는다 (max-age=0 은 Chromium 캡처)
+            # [실측 2026-11-25 Camoufox 158 -> 로컬 에코 서버]
+            data=body, headers={"content-type": content_type},
             referer=uploader_url, kind=RequestKind.IFRAME, user_activated=False,
         )
         if resp.status_code != 200 or "uploadCallback_success" not in resp.text:
@@ -268,7 +283,11 @@ class CafeCreationMixin:
         for _ in range(attempts):
             if challenge is None or not challenge.key:
                 # 새 문제를 못 받았으면 화면을 다시 연 것처럼 키를 다시 받는다 [추정]
+                # 화면 정보를 다시 받으면 clubTempId 도 새로 나온다 -> 화면 토큰을 통째로 바꿔 화면을 다시 연 것과 같게 둔다.
+                # (서버는 clubTempId 와 캡차 키의 짝을 검사하지 않는다 - 섞어 보낸 만들기 5번 모두 성공 [실측 2026-11-25])
                 fresh = await self.creation_info()
+                info.club_temp_id, info.alim_code, info.agreed_terms = (
+                    fresh.club_temp_id, fresh.alim_code, fresh.agreed_terms)
                 info.image_captcha_key, info.image_captcha_url = fresh.image_captcha_key, fresh.image_captcha_url
                 info.sound_captcha_key = fresh.sound_captcha_key
                 challenge = info.challenge(ctype)
@@ -309,6 +328,7 @@ class CafeCreationMixin:
         if options is not None and fields:
             raise TypeError("options 와 개별 필드를 함께 줄 수 없습니다")
         opts = options or CafeCreateOptions(**fields)
+        opts.check()  # 만든 뒤 값을 바꿨을 수도 있다
         self._require_login()
         info = await self.creation_info()
 
@@ -349,8 +369,10 @@ class CafeCreationMixin:
         if resolve_id:
             try:
                 cafe_id = await self.id_from_slug(club_url)
-            except (NaverAPIError, ParseError):
-                cafe_id = 0  # 만든 직후 홈이 아직 안 열리는 경우 [추정] - 카페는 만들어졌다
+            except CaffeinateError as e:
+                # 카페는 이미 만들어졌다 - 여기서 예외를 내면 호출자가 다시 만들어 중복이 된다
+                logger.warning("카페는 만들었지만 숫자 ID 조회 실패 (%s): %s", club_url, e)
+                cafe_id = 0
         return CreatedCafe(
             url=club_url, name=opts.name, cafe_id=cafe_id, icon_url=uploaded.url if uploaded else "",
             message=str(res.get("message") or ""), raw=res,

@@ -314,3 +314,55 @@ def test_comment_schema_allows_no_sticker() -> None:
     jsonschema.validate({"text": "a", "sticker": "cafe_001-1-185-160"}, s)
     with pytest.raises(jsonschema.ValidationError):
         jsonschema.validate({"text": "a", "sticker": "bad"}, s)
+
+
+def test_review_fixes_spec() -> None:
+    """리뷰: 표 prefixItems, 블록 안 칸 strict, 빈 출처 None, 왕복 필드, 줄바꿈 조각, 스키마 패턴, 타입 검사"""
+    import jsonschema
+
+    from caffeinate import (
+        Align,
+        CaffeinateError,
+        Document,
+        Heading,
+        Image,
+        LinkCard,
+        Paragraph,
+        Quote,
+        Span,
+        Table,
+        Text,
+    )
+    from caffeinate.models.spec import SpecError, document_schema
+
+    tpl = Document([Heading("", hint="h"), Table([["a"], ["b", "c"]]), Quote("", source="")])
+    sc = tpl.fill_schema()
+    ok = {"0_heading": {"content": "x"}, "1_table": {"rows": [["x"], ["y", "z"]]}, "2_quote": {"content": "q", "source": ""}}
+    jsonschema.validate(ok, sc)
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate({**ok, "1_table": {"rows": [["x", "y"], ["z"]]}}, sc)
+    assert tpl.fill(ok).blocks[2].source is None
+    for bad in ({**ok, "0_heading": {}}, {**ok, "0_heading": {"content": "x", "foo": 1}}, {**ok, "0_heading": {"content": None}}):
+        with pytest.raises(SpecError):
+            tpl.fill(bad)
+    assert issubclass(SpecError, CaffeinateError)
+
+    v = jsonschema.Draft202012Validator(document_schema())
+    for bad_block in ({"type": "image"}, {"type": "file"}, {"type": "video"}, {"type": "table", "rows": [[]]},
+                      {"type": "text", "content": [{"spans": [{"text": "a", "color": "red"}]}]},
+                      {"type": "link_card", "url": "ftp://x"}):
+        assert not v.is_valid({"blocks": [bad_block]}), bad_block
+    with pytest.raises(SpecError):
+        Document.from_spec({"blocks": [{"type": "text", "content": [{"spans": [{"text": "a", "bold": "false"}]}]}]})
+
+    doc = Document([Text([Paragraph([Span("a\nb")])]), Text([]),
+                    LinkCard("https://youtu.be/x", "t", "YouTube", video=True),
+                    Table([["a"]], 50, "x", align=Align.CENTER, border_style="dotLine"), Image("a.png", layout="wide")])
+    sp = doc.to_spec()
+    assert v.is_valid(sp)
+    back = Document.from_spec(sp)
+    assert len(back.blocks[0].content) == 1 and len(back.blocks[1].content) == 0
+    assert (back.blocks[2].video, back.blocks[2].domain) == (True, "YouTube")
+    t = back.blocks[3]
+    assert (t.width, t.layout, t.align, t.border_style, back.blocks[4].layout) == (50, "x", "center", "dotLine", "wide")
+    assert back.to_spec() == sp

@@ -23,7 +23,9 @@ extra 는 기본값을 덮어쓴다 (완전 커스텀). 모르는 @ctype 은 `Ra
 - javascript: 링크는 href="" 로 비움 / 텍스트의 HTML 은 이스케이프 / 문단 120개 x 1000자도 저장
 그래서 로컬에서 막는 것: 빈 문서, 업로드 안 된 이미지, 글자 크기·색 형식, http(s) 아닌 링크, 빈 표, 스티커 번호.
 """
+import copy
 import json
+import logging
 import re
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field
@@ -45,6 +47,7 @@ from ..utils.editor import SE_VERSION, se_id, ulid
 from ..utils.parsing import as_dict, as_int, as_list
 from .photo import UploadedImage
 
+logger = logging.getLogger(__name__)
 CTYPE: str = "@ctype"
 JSONDict: TypeAlias = dict[str, Any]
 STICKER_DOMAIN = "https://storep-phinf.pstatic.net"
@@ -69,6 +72,14 @@ def _check_line_height(v: float | None) -> None:
 
 def _s(v: Any) -> str:
     return str(v.value if isinstance(v, Enum) else v)
+
+
+def font_size_of(v: Any) -> FontSize:
+    """"fs15" / "FS15" / FontSize -> FontSize (목록 밖이면 ValueError - 렌더·저장 전에 알린다)"""
+    s = str(getattr(v, "value", v)).strip().lower()
+    if s not in _FONT_SIZES:
+        raise ValueError(f"글자 크기는 {sorted(_FONT_SIZES)} 중 하나입니다: {v!r}")
+    return FontSize(s)
 
 
 def _check_color(name: str, value: str | None) -> None:
@@ -137,19 +148,30 @@ class TextStyle:
 
     @classmethod
     def from_dict(cls, d: Any) -> Self:
+        # 서버 값은 검사하지 않고 받는다: 형식 밖 값(transparent, #rrggbbaa, 목록 밖 크기·서체)은 extra 로 그대로 보존
         d = as_dict(d)
-        size = d.get("fontSizeCode")
-        font = d.get("fontFamily")
+        known: dict[str, Any] = {}
+        odd: JSONDict = {}
+        for key, ok in (("fontColor", lambda v: isinstance(v, str) and bool(_COLOR_RE.match(v))),
+                        ("backgroundColor", lambda v: isinstance(v, str) and bool(_COLOR_RE.match(v))),
+                        ("fontSizeCode", lambda v: isinstance(v, str) and v in _FONT_SIZES),
+                        ("fontFamily", lambda v: isinstance(v, str) and v in _FONT_FAMILIES)):
+            v = d.get(key)
+            if v in (None, ""):
+                continue
+            if ok(v):
+                known[key] = v
+            else:
+                odd[key] = v
+        size, font = known.get("fontSizeCode"), known.get("fontFamily")
         return cls(
             bold=bool(d.get("bold")), italic=bool(d.get("italic")), underline=bool(d.get("underline")),
-            strike=bool(d.get("strikeThrough")), color=d.get("fontColor") or None,
-            background=d.get("backgroundColor") or None,
-            size=FontSize(size) if size in _FONT_SIZES else None,
-            font=FontFamily(font) if font in _FONT_FAMILIES else None,
+            strike=bool(d.get("strikeThrough")), color=known.get("fontColor"),
+            background=known.get("backgroundColor"),
+            size=FontSize(size) if size else None,
+            font=FontFamily(font) if font else None,
             extra=_split(d, ("bold", "italic", "underline", "strikeThrough", "fontColor", "backgroundColor",
-                             "fontSizeCode", "fontFamily"))
-            | ({"fontSizeCode": size} if size and size not in _FONT_SIZES else {})
-            | ({"fontFamily": font} if font and font not in _FONT_FAMILIES else {}),
+                             "fontSizeCode", "fontFamily")) | odd,
         )
 
 
@@ -360,7 +382,7 @@ class Block:
     CTYPE: ClassVar[str] = ""
     _REGISTRY: ClassVar[dict[str, type["Block"]]] = {}
 
-    id: str = field(default_factory=se_id)
+    id: str = field(default_factory=se_id, compare=False)  # 같은 내용이면 같은 블록 (id 는 비교하지 않음)
     extra: JSONDict = field(default_factory=dict)
     hint: str | None = field(default=None, compare=False)  # AI 채우기 지시 (스키마 description, contentJson 에는 안 나감)
 
@@ -386,7 +408,14 @@ class Block:
         target = Block._REGISTRY.get(str(d.get(CTYPE) or ""), RawBlock)
         if cls is not Block and not issubclass(target, cls):
             raise ValueError(f"{cls.__name__} 가 아닌 컴포넌트입니다: @ctype={d.get(CTYPE)!r}")
-        return target._parse(d)
+        try:
+            return target._parse(d)
+        except (ValueError, TypeError) as e:
+            if cls is not Block or target is RawBlock or not d.get(CTYPE):
+                raise
+            # 서버 문서의 컴포넌트 하나가 형식 밖이어도 문서 전체를 못 읽지 않게 dict 그대로 보존한다
+            logger.warning("%s 컴포넌트를 해석하지 못해 RawBlock 으로 보존합니다: %s", d.get(CTYPE), e)
+            return RawBlock._parse(d)
 
     @classmethod
     def _parse(cls, d: JSONDict) -> "Block":
@@ -535,6 +564,8 @@ class Code(Block):
     def __post_init__(self) -> None:
         if not isinstance(self.code, str):
             raise TypeError("Code.code 는 str 이어야 합니다")
+        if self.font_size is not None:
+            self.font_size = font_size_of(self.font_size)
 
     def _body(self) -> JSONDict:
         d: JSONDict = {"layout": _s(self.layout)}
@@ -693,7 +724,7 @@ class Image(Block):
     def _body(self) -> JSONDict:
         img = self.uploaded
         if img is None:
-            raise ValueError("업로드 안 된 Image 입니다 - articles.write 에 넘기거나 Document.upload_images 로 먼저 올리세요")
+            raise ValueError("업로드 안 된 Image 입니다 - articles.write 에 넘기면 자동으로 올립니다 (직접: cafe.photos.upload 결과 UploadedImage 를 Image 에)")
         # [실측 2026-11-12] path 는 업로드 응답 <url>. 키 순서는 브라우저 캡처 그대로
         d: JSONDict = {
             "layout": _s(self.layout), "src": img.src, "internalResource": True, "represent": bool(self.represent),
@@ -755,7 +786,7 @@ class ImageGroup(Block):
     @classmethod
     def _parse(cls, d: JSONDict) -> "ImageGroup":
         return cls([Image._parse(as_dict(i)) for i in as_list(d.get("images"))],
-                   _enum_or_str(ImageGroupLayout, d.get("layout")), str(d.get("contentMode") or "normal"),
+                   _enum_or_str(ImageGroupLayout, d.get("layout"), ImageGroupLayout.SLIDE), str(d.get("contentMode") or "normal"),
                    id=str(d.get("id") or se_id()), extra=_split(d, ("id", "layout", "contentMode", "images")))
 
     def images(self) -> Iterator[Image]:
@@ -885,10 +916,12 @@ class Sticker(Block):
     @classmethod
     def _parse(cls, d: JSONDict) -> "Sticker":
         th = Thumbnail.from_dict(d.get("thumbnail"))
+        fmt = d.get("format")
+        odd = {} if fmt in (None, StickerFormat.ANIMATED, StickerFormat.NORMAL) else {"format": fmt}  # 모르는 값 보존
         return cls(str(d.get("packCode") or ""), as_int(d.get("seq")), th.width if th else 185,
-                   th.height if th else 160, th.src if th else None, d.get("format") == StickerFormat.ANIMATED,
+                   th.height if th else 160, th.src if th else None, fmt == StickerFormat.ANIMATED,
                    str(d.get("layout") or "default"), id=str(d.get("id") or se_id()),
-                   extra=_split(d, ("id", "layout", "packCode", "seq", "thumbnail", "format")))
+                   extra=_split(d, ("id", "layout", "packCode", "seq", "thumbnail", "format")) | odd)
 
     @classmethod
     def from_api(cls, item: Any, *, pack_code: str = "", animated: bool | None = None) -> Self:
@@ -947,7 +980,7 @@ class LinkCard(Block):
     def _parse(cls, d: JSONDict) -> "LinkCard":
         return cls(str(d.get("link") or ""), str(d.get("title") or ""), str(d.get("domain") or ""),
                    str(d.get("description") or ""), Thumbnail.from_dict(d.get("thumbnail")),
-                   d.get("oglinkSign") or None, bool(d.get("video")), _enum_or_str(LinkCardLayout, d.get("layout")),
+                   d.get("oglinkSign") or None, bool(d.get("video")), _enum_or_str(LinkCardLayout, d.get("layout"), LinkCardLayout.LARGE_IMAGE),
                    id=str(d.get("id") or se_id()),
                    extra=_split(d, ("id", "layout", "title", "domain", "link", "thumbnail", "description", "video",
                                     "oglinkSign")))
@@ -966,9 +999,10 @@ class LinkCard(Block):
                    layout)
 
 
-def _enum_or_str(enum: type[Enum], value: Any) -> Any:
+def _enum_or_str(enum: type[Enum], value: Any, default: Any = None) -> Any:
+    """값 -> enum (모르는 값은 문자열 그대로). 값이 없으면 default (생성자 기본값과 맞춘다), 그것도 없으면 첫 멤버"""
     if value is None:
-        return next(iter(enum.__members__.values()))  # type: ignore[call-overload]
+        return default if default is not None else next(iter(enum.__members__.values()))  # type: ignore[call-overload]
     try:
         return enum(value)
     except ValueError:
@@ -1030,17 +1064,19 @@ class Document:
             raise ValueError("빈 문서입니다 (블록이 하나 이상 있어야 합니다)")
         media = [m for b in self.blocks for m in b.media()]
         auto = media[0] if media and not any(m.represent for m in media) else None
+        before = auto.represent if auto is not None else None
         if auto is not None:
             auto.represent = True  # 첫 사진/동영상이 대표 (직렬화하는 동안만 - 사용자 객체는 그대로 둔다)
         try:
             components = [b.to_dict() for b in self.blocks]
         finally:
             if auto is not None:
-                auto.represent = None
+                auto.represent = before
         if self.defaults is not None and not self.defaults.is_empty():
             for c in components:   # 본문·소제목·인용구 문단 (블록·문단에 직접 준 값이 이긴다)
                 for key in _PARAGRAPH_KEYS.get(c.get(CTYPE), ()):
                     if isinstance(c.get(key), list):
+                        c[key] = copy.deepcopy(c[key])   # extra 로 받은 사용자 리스트를 바꾸지 않게
                         self.defaults.apply(c[key])
         doc: JSONDict = {"version": self.version, "theme": self.theme, "language": self.language, "id": self.id,
                          "di": {"dif": False, "dio": self._dio()}, "components": components}

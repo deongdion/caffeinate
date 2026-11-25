@@ -372,6 +372,8 @@ async def _solve_captcha_audio_once(page: Any, opt: LoginOptions, on_status: Cal
             if not ocr.ok:
                 raise LoginError(f"OCR HTTP {ocr.status}")
             data = json.loads(await ocr.text())
+            if not isinstance(data, dict):  # 리스트·문자열 응답이면 data.get 이 AttributeError 로 로그인째 죽는다
+                raise LoginError(f"OCR 응답이 객체가 아님: {str(data)[:100]}")
             digits = re.sub(r"\s+", "", str(data.get("digits") or ""))
             if digits.isdigit():
                 answer = digits

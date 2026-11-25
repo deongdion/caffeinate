@@ -39,6 +39,7 @@ import asyncio
 import functools
 import json
 import logging
+import re
 import time
 from types import TracebackType
 from typing import Any, Self
@@ -103,7 +104,10 @@ def firefox_h2_options() -> dict[CurlOpt, int]:
 def _log_url(url: str) -> str:
     """로그용 URL (쿼리 제외 - 토큰/식별자 노출 방지)"""
     u = urlsplit(url)
-    return f"{u.scheme}://{u.netloc}{u.path}"
+    path = u.path
+    if u.netloc.endswith("upphoto.naver.com"):  # 업로더 세션키가 경로 첫 칸에 있다
+        path = re.sub(r"^/[^/]+", "/***", path)
+    return f"{u.scheme}://{u.netloc}{path}"
 
 
 class CafeSession:
