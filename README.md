@@ -605,7 +605,9 @@ mypy caffeinate
 - 리뷰 수정 (에이전트 4개 교차 검토 → 재현된 것만):
   - 카페 만들기: 만든 뒤 ID 조회가 어떤 오류로 실패해도 결과를 돌려줌 (중복 생성 방지), OCR 서버 연결 실패도 재시도 → `CaptchaError`,
     `keywords="한 단어"` 가 글자로 쪼개지던 것, `regions()`/`manage_info()` 오류 본문을 빈 값으로 삼키던 것, 캡차 키를 다시 받을 때
-    화면 토큰도 함께 새로 받기 (실측: 서버는 `clubTempId`·캡차 키 짝을 검사하지 않음 - 섞어 보내도 5/5 생성), 만든 뒤 바꾼 옵션 재검사, 본문 401 → `NotLoggedInError`, `CafeValidationError` pickle, 업로더 세션키 로그 가림
+    화면 토큰도 함께 새로 받기 (실측: 서버는 `clubTempId`·캡차 키 짝을 검사하지 않음 - 섞어 보내도 5/5 생성.
+    첫 풀이 실패 -> 화면 정보 다시 받기 -> 두 번째 풀이로 생성까지 실측), 만든 뒤 바꾼 옵션 재검사.
+    카페 폐쇄는 지원하지 않는다: 관리 화면(studio.cafe.naver.com) 전체가 실명 본인 인증을 먼저 요구한다 [실측 2026-11-25], 본문 401 → `NotLoggedInError`, `CafeValidationError` pickle, 업로더 세션키 로그 가림
   - 블록: `CommentDraft.of(CommentDraft(image=경로))` 사진이 글로 들어가던 것, 서버 서식 값(`transparent`·`#rrggbbaa` 등)에
     `from_dict` 가 죽던 것 (extra 로 보존), 해석 못 한 컴포넌트는 `RawBlock` 으로 보존, `to_dict` 가 `represent=False`·extra 리스트를
     바꾸던 것, layout 없는 묶음 사진·링크 카드 기본값, 모르는 스티커 `format` 보존, 블록 `==` 이 id 를 비교하지 않음
